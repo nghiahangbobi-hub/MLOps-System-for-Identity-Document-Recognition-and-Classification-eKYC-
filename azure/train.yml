@@ -1,0 +1,31 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandJob.schema.json
+type: command
+experiment_name: ekyc-midv2020
+code: ./src
+compute: azureml:replace-with-training-compute
+environment: azureml:ekyc-training:1
+inputs:
+  dataset:
+    type: uri_folder
+    path: azureml:replace-with-dataset:1
+    mode: ro_mount
+  manifest:
+    type: uri_file
+    path: azureml:replace-with-manifest:1
+    mode: download
+  epochs: 5
+  batch_size: 16
+  learning_rate: 0.001
+outputs:
+  model_bundle:
+    type: custom_model
+    mode: upload
+command: >-
+  python -m modeling.train
+  --dataset-root "${{inputs.dataset}}"
+  --manifest "${{inputs.manifest}}"
+  --output-dir "${{outputs.model_bundle}}"
+  --epochs ${{inputs.epochs}}
+  --batch-size ${{inputs.batch_size}}
+  --learning-rate ${{inputs.learning_rate}}
+  --device cpu

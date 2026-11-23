@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>eKYC document check</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #f0f4f2; color: #182d27; font: 1rem/1.55 system-ui, sans-serif; }
+  main { width: min(38rem, calc(100% - 2rem)); margin: clamp(1rem, 10vh, 6rem) auto;
+         background: white; border: 1px solid #ccd9d2; border-radius: 1rem; padding: clamp(1.2rem, 5vw, 2.75rem); }
+  h1 { margin: 0; font-size: clamp(1.7rem, 5vw, 2.4rem); letter-spacing: -.035em; }
+  label, button { display: block; font-weight: 650; }
+  input { display: block; max-width: 100%; margin: .5rem 0 1.25rem; font: inherit; }
+  button { padding: .65rem 1rem; border: 0; border-radius: .45rem; color: white; background: #1d604a; font-size: 1rem; }
+  button:disabled { opacity: .6; }
+  button[hidden] { display: none; }
+  #report { margin-top: 1rem; }
+  #message:empty { display: none; }
+  dl { margin-bottom: 0; }
+  dl div { display: flex; justify-content: space-between; gap: 1rem; border-top: 1px solid #ccd9d2; padding: .6rem 0; }
+  dd { margin: 0; overflow-wrap: anywhere; text-align: right; font-weight: 650; }
+</style>
+<main>
+  <h1>eKYC document check</h1>
+  <p>Upload a synthetic ID card or passport image to check its document type and image quality.</p>
+  <form>
+    <label for="image">Image <small>(JPEG or PNG, up to 8 MiB)</small></label>
+    <input id="image" type="file" accept="image/jpeg,image/png" required>
+    <button>Check document</button>
+  </form>
+  <section aria-live="polite" aria-label="Scoring result">
+    <p id="message"></p>
+    <dl id="result" hidden>
+      <div><dt>Document type</dt><dd id="label"></dd></div>
+      <div><dt>Image quality</dt><dd id="status"></dd></div>
+      <div><dt>Confidence</dt><dd id="confidence"></dd></div>
+      <div><dt>Review needed</dt><dd id="needs_review"></dd></div>
+    </dl>
+    <button id="report" type="button" hidden>Report incorrect prediction</button>
+  </section>
+</main>
+<script>
+  const form = document.querySelector('form');
+  const button = form.querySelector('button');
+  const result = document.querySelector('#result');
+  const message = document.querySelector('#message');
+  const reportButton = document.querySelector('#report');
+  const imageInput = document.querySelector('#image');
+  let reportToken = null;
+
+  imageInput.addEventListener('change', () => {
+    reportToken = null;
+    reportButton.hidden = true;
+    result.hidden = true;
+    message.textContent = '';
+  });
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    result.hidden = true;
+    reportToken = null;
+    reportButton.hidden = true;
+    message.textContent = 'Checking document…';
+    button.disabled = true;
+    imageInput.disabled = true;
+    try {
+      const image = imageInput.files[0];
+      if (!image || !image.size || image.size > 8 * 1024 * 1024) {
+        throw new Error('Choose an image between 1 byte and 8 MiB.');
+      }
+      const response = await fetch('/predict', {
+        method: 'POST', headers: { 'Content-Type': image.type }, body: image
+      });
+      const prediction = await response.json();
+      if (!response.ok) throw new Error(prediction.error);
+      const fields = {
+        label: prediction.label,
+        status: prediction.status ?? 'Unavailable',
+        confidence: typeof prediction.confidence === 'number'
+          ? new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 }).format(prediction.confidence)
+          : 'Unavailable',
+        needs_review: prediction.needs_review ? 'Yes' : 'No'
+      };
+      for (const [field, value] of Object.entries(fields)) {
+        document.getElementById(field).textContent = value;
+      }
+      result.hidden = false;
+      reportToken = response.headers.get('X-EKYC-Report-Token');
+      reportButton.hidden = !reportToken;
+      const reviewStatus = response.headers.get('X-EKYC-Review-Status');
+      message.textContent = ({
+        queued: 'Added to the review queue.',
+        not_allowlisted: 'This image is outside the mock review allowlist.'
+      })[reviewStatus] ?? '';
+    } catch (error) {
+      message.textContent = error.message;
+    } finally {
+      button.disabled = false;
+      imageInput.disabled = false;
+    }
+  });
+
+  reportButton.addEventListener('click', async () => {
+    if (!reportToken) return;
+    reportButton.disabled = true;
+    button.disabled = true;
+    imageInput.disabled = true;
+    try {
+      const response = await fetch('/report', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: reportToken })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error);
+      message.textContent = 'Incorrect prediction reported.';
+      reportToken = null;
+      reportButton.hidden = true;
+    } catch (error) {
+      message.textContent = error.message;
+    } finally {
+      reportButton.disabled = false;
+      button.disabled = false;
+      imageInput.disabled = false;
+    }
+  });
+</script>

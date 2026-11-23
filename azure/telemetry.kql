@@ -1,0 +1,10 @@
+// Log Analytics workspace. Set diagnostic settings on the managed endpoint
+// to send AmlOnlineEndpointTrafficLog to this workspace.
+AmlOnlineEndpointTrafficLog
+| where TimeGenerated > ago(24h)
+| summarize Requests = count(),
+            Failures = countif(ResponseCode >= 400),
+            P50Ms = percentile(TotalDurationMs, 50),
+            P95Ms = percentile(TotalDurationMs, 95)
+  by EndpointName, DeploymentName, bin(TimeGenerated, 15m)
+| order by TimeGenerated desc
