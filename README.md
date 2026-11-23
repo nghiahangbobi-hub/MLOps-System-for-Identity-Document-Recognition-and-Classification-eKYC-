@@ -1,5 +1,7 @@
 # MLOps eKYC
 
+**English** · [Tiếng Việt](README.vi.md)
+
 Classify MIDV-2020 clip frames as `ID_Card` or `Passport`, assess image quality when reviewed targets are available, and send uncertain or degraded images for review. The project covers the predictive-analysis branch of the course rubric.
 
 ## Local pipeline
@@ -53,7 +55,7 @@ The [HITL runbook](docs/hitl.md) connects demo predictions and explicit reports 
 
 ## Azure and tests
 
-[Azure Blob Storage từ đầu](azure/blob-storage.md) hướng dẫn tạo workspace, tải ảnh và đăng ký data asset.
+The [Azure Blob Storage setup guide](azure/blob-storage.md) covers workspace creation, image upload, and data asset registration (in Vietnamese).
 
 The [Azure runbook](azure/README.md) covers deployment, demo configuration, and benchmark commands. Keep datasets, model artifacts, credentials, and evaluation outputs in private storage.
 
