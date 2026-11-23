@@ -53,6 +53,8 @@ The [HITL runbook](docs/hitl.md) connects demo predictions and explicit reports 
 
 ## Azure and tests
 
+[Azure Blob Storage từ đầu](azure/blob-storage.md) hướng dẫn tạo workspace, tải ảnh và đăng ký data asset.
+
 The [Azure runbook](azure/README.md) covers deployment, demo configuration, and benchmark commands. Keep datasets, model artifacts, credentials, and evaluation outputs in private storage.
 
 After installing dependencies in a virtual environment, run the component regression tests:

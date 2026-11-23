@@ -1,5 +1,7 @@
 # Azure ML handoff
 
+Bắt đầu với [Azure Blob Storage từ đầu](blob-storage.md) nếu chưa tạo workspace hoặc data asset.
+
 Run commands from the repository root. The orchestrator owns cloud changes.
 Use an authenticated Azure CLI with the `ml` extension, an existing workspace,
 CPU training compute, dataset folder and manifest file assets, and an available
