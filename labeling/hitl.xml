@@ -1,0 +1,18 @@
+<View>
+  <Image name="image" value="$image" />
+  <Header value="Confirm or correct the document type. Choose Outside_Scope when there is no supported document." />
+  <Choices name="document_type" toName="image" choice="single-radio" required="true">
+    <Choice value="ID_Card" />
+    <Choice value="Passport" />
+    <Choice value="Outside_Scope" />
+  </Choices>
+  <View visibleWhen="choice-selected" whenTagName="document_type" whenChoiceValue="ID_Card,Passport">
+    <Header value="Choose the main issue affecting document readability." />
+    <Choices name="quality" toName="image" choice="single-radio" required="true">
+      <Choice value="Clear" />
+      <Choice value="Blur" />
+      <Choice value="Glare" />
+      <Choice value="Occluded" />
+    </Choices>
+  </View>
+</View>

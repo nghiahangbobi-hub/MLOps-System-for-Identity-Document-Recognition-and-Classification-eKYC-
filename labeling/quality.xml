@@ -1,0 +1,11 @@
+<View>
+  <Image name="image" value="$image" />
+  <Header value="Choose the main issue affecting document readability." />
+  <Choices name="quality" toName="image" choice="single-radio" required="true">
+    <Choice value="Clear" />
+    <Choice value="Blur" />
+    <Choice value="Glare" />
+    <Choice value="Occluded" />
+    <Choice value="Outside_Scope" />
+  </Choices>
+</View>
