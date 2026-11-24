@@ -1,0 +1,2 @@
+# Compact project threads before they approach the model's context limit.
+model_auto_compact_token_limit = 80000

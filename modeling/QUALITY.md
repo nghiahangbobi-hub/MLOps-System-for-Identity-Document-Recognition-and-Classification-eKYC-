@@ -1,5 +1,7 @@
 # Fixed-split MobileNetV3 comparison
 
+**English** · [Tiếng Việt](QUALITY.vi.md)
+
 Run from the project root in a Python 3.11 environment with the modeling
 requirements. Use a CUDA-enabled Torch install only when an actual CUDA tensor
 operation succeeds. The commands default to six Torch CPU threads, one interop
@@ -103,4 +105,35 @@ accuracy on all held-out frames, including those routed for review.
 
 ```bash
 OMP_NUM_THREADS=6 "$runtime" -m unittest -v modeling.test_quality_compare modeling.test_release
+```
+
+## Additional capture domains
+
+Evaluate a sealed model on one photo or scan per held-out mock document. Use
+the original `split.json` from `ops.prepare_model_quality` and provide distinct
+TAR files with matching document rosters. The evaluator reads the archives
+in place and keeps the original crop, temperature, and threshold. Report
+each capture domain separately and retain the JSON privately. Results for
+different captures of the same mock document are paired observations.
+
+```bash
+"$runtime" -m ops.evaluate_capture_domains --bundle "$FINAL_RUN_DIR/bundle" \
+  --split-record "$SPLIT_RECORD" --archive "$MIDV_DIR/photo.tar" \
+  --archive "$MIDV_DIR/scan_rotated.tar" --archive "$MIDV_DIR/scan_upright.tar" \
+  --archive "$MIDV_DIR/templates.tar" --output "$CAPTURE_RESULTS"
+```
+
+## Prepare a multi-domain fine-tuning dataset
+
+Use the historical development manifest and both the saved split record and
+its associated digest. This command creates a private development-only dataset
+with a `domain` column and blank quality targets. Evaluate the frozen baseline
+and each fine-tuned epoch on the same validation rows. Track per-domain
+macro-F1 and require an explicit validation gate before publishing a bundle.
+
+```bash
+"$runtime" -m data_pipeline.multisource \
+  --clips-manifest "$CLIPS_DEVELOPMENT_CSV" --clips-root "$CLIPS_DATASET_ROOT" \
+  --split-record "$SPLIT_RECORD" --split-sha256 "$SPLIT_SHA256" \
+  --archive-dir "$MIDV_DIR" --output "$PRIVATE_DATASET_ROOT"
 ```

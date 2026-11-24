@@ -1,5 +1,7 @@
 # MIDV-2020 quality review
 
+**English** · [Tiếng Việt](README.vi.md)
+
 Run from the project root. Keep the dataset, task files and annotation exports in
 a local work directory outside the repository.
 Install Pillow in the project environment with

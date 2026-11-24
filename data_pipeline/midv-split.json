@@ -1,0 +1,35 @@
+{
+  "splits": {
+    "train": {
+      "ID_Card": 900,
+      "Passport": 600
+    },
+    "validation": {
+      "ID_Card": 300,
+      "Passport": 300
+    },
+    "test": {
+      "ID_Card": 300,
+      "Passport": 300
+    }
+  },
+  "layouts": {
+    "train": [
+      "aze_passport",
+      "esp_id",
+      "fin_id",
+      "grc_passport",
+      "svk_id"
+    ],
+    "validation": [
+      "est_id",
+      "srb_passport"
+    ],
+    "test": [
+      "alb_id",
+      "lva_passport"
+    ]
+  },
+  "development.csv_sha256": "24bd3ec8fb2b2e3f39d629d0410dad9f94dfe663043f4183bfeb80ed8a6e48a0",
+  "held-out.csv_sha256": "7f17c80b717fb57d2b2649137f6128292feb6ccf5e6a84ce5d6b562c1da42625"
+}

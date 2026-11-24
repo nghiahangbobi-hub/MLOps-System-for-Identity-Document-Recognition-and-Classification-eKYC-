@@ -1,8 +1,26 @@
 # MLOps eKYC
 
+For the extracted MIDV-2020 sample, follow the [new dataset replay and results](docs/midv-5gb.md).
+
 **English** · [Tiếng Việt](README.vi.md)
 
 Classify MIDV-2020 clip frames as `ID_Card` or `Passport`, assess image quality when reviewed targets are available, and send uncertain or degraded images for review. The project covers the predictive-analysis branch of the course rubric.
+
+## Project structure
+
+| Directory | Responsibility |
+|---|---|
+| `data_pipeline/` | Read-only MIDV extraction, template-based splits, manifests and data checks. |
+| `labeling/` | Label Studio interfaces, review export ingestion, approval and dataset lineage. |
+| `modeling/` | Training, validation-based model selection, metrics and inference. |
+| `azure/` | Blob and Azure ML instructions, job and endpoint definitions, benchmarks and telemetry. |
+| `demo/` | Browser upload, scoring proxy and review queue. |
+| `ops/` | Reproduction and verification tools. |
+| `docs/` | Workflow documentation. Keep local evidence outside the source release. |
+
+For a new check, use a fresh Python environment and keep the dataset,
+model and run outputs in a dedicated external working directory. Use
+[the model evaluation runbook](modeling/QUALITY.md) for a complete experiment.
 
 ## Local pipeline
 
@@ -55,7 +73,7 @@ The [HITL runbook](docs/hitl.md) connects demo predictions and explicit reports 
 
 ## Azure and tests
 
-The [Azure Blob Storage setup guide](azure/blob-storage.md) covers workspace creation, image upload, and data asset registration (in Vietnamese).
+The [Azure Blob Storage setup guide](azure/blob-storage.en.md) covers workspace creation, image upload, and data asset registration.
 
 The [Azure runbook](azure/README.md) covers deployment, demo configuration, and benchmark commands. Keep datasets, model artifacts, credentials, and evaluation outputs in private storage.
 

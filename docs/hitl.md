@@ -1,5 +1,7 @@
 # Human-in-the-loop review
 
+**English** · [Tiếng Việt](hitl.vi.md)
+
 Use a trusted MIDV-2020 mock manifest and its dataset root. The queue indexes exact image bytes from that manifest. Only matching JPEG or PNG files are eligible for persistence. Keep the queue, batch, raw reviews, approval files, dataset versions, and model artifacts in private local storage. Keep the validation and test layouts fixed.
 
 Set `work` to a private working directory and `dataset` to the prepared dataset directory containing the manifest and images.
@@ -57,6 +59,34 @@ python -m modeling.train --dataset-root "$dataset" \
 ```
 
 Record the model run ID with the version ID, manifest digest, and observed quality sample counts. Quality model accuracy requires approved human labels in the evaluation split. Release still requires an actual human to finish and approve the real review batch and the operator to run managed Azure checks.
+
+## Extracted sample review on this host
+
+Open task 57 in [Label Studio project 3](http://127.0.0.1:8080/projects/3/data).
+The task contains an actual queued MIDV-2020 mock prediction. After reviewing
+the document type and quality, export raw JSON and retain the original bytes.
+Run the following from the project root in the release environment after the
+human reviewer has supplied the export and approval identity.
+Use the annotation's `completed_by` account ID as `reviewer_id` when the
+approving user has confirmed that review. This project serves images from a
+batch-specific media directory. Approval accepts that exact batch URL and
+records the SHA-256 of the original export.
+
+```bash
+run=runs/midv-5gb
+dataset=Data/MIDV2020_sample_5GB
+work=$(mktemp -d "$run/review-approval.XXXXXX")
+python -m labeling.hitl approve --batch "$run/review-batch" \
+  --review-export "$review_export" --reviewer "$reviewer_id" \
+  --output "$work/approval.json"
+python -m labeling.hitl publish --batch "$run/review-batch" \
+  --review-export "$review_export" --approval "$work/approval.json" \
+  --base-manifest "$run/inputs/manifest.csv" --dataset-root "$dataset" \
+  --versions-root "$work/versions"
+```
+
+Use the emitted version with the manual training command above. Preserve
+the approval, lineage and training run ID together.
 
 ## Reproduce the local technical test
 

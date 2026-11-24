@@ -1,6 +1,8 @@
 # Azure ML handoff
 
-Bắt đầu với [Azure Blob Storage từ đầu](blob-storage.md) nếu chưa tạo workspace hoặc data asset.
+**English** · [Tiếng Việt](README.vi.md)
+
+Start with the [Azure Blob Storage setup guide](blob-storage.en.md) if you still need a workspace or data assets.
 
 Run commands from the repository root. The orchestrator owns cloud changes.
 Use an authenticated Azure CLI with the `ml` extension, an existing workspace,
@@ -10,6 +12,118 @@ managed endpoint SKU. Set `AZ_SUBSCRIPTION`, `AZ_RESOURCE_GROUP`,
 `AZ_ENDPOINT`. Asset variables use the form `azureml:name:version`.
 The mounted dataset's layout must match the manifest's relative `image_path`
 values. Use a reviewed manifest for quality evaluation.
+
+## First CPU smoke run
+
+After verifying Blob and registering both data assets, check quota in the
+workspace region. In Japan East, the project uses the DSv3 family when quota
+is available. A zero-node minimum scales down idle compute.
+
+```bash
+workspace=(--subscription "$AZ_SUBSCRIPTION" --resource-group "$AZ_RESOURCE_GROUP" --workspace-name "$AZ_WORKSPACE")
+az ml compute list-usage "${workspace[@]}" --location japaneast -o table
+export AZ_COMPUTE=ekyc-cpu
+az ml compute create "${workspace[@]}" --name "$AZ_COMPUTE" --type amlcompute \
+  --size Standard_D2s_v3 --min-instances 0 --max-instances 1 \
+  --idle-time-before-scale-down 120
+az ml compute show "${workspace[@]}" --name "$AZ_COMPUTE" --query provisioning_state -o tsv
+```
+
+Wait for `Succeeded` before submission. Use the workspace's existing compute
+if it already meets these settings. Submit the smoke once for the versioned
+Blob inputs and keep the job name for status checks and artifact retrieval.
+
+```bash
+work_dir=$(mktemp -d)
+python azure/stage.py --training-only "$work_dir/aml"
+spec="$work_dir/aml"
+az ml environment create "${workspace[@]}" -f "$spec/environment-training.yml"
+job=$(az ml job create "${workspace[@]}" -f "$spec/train.yml" \
+  --set "compute=azureml:$AZ_COMPUTE" "inputs.dataset.path=$AZ_DATASET_ASSET" \
+        "inputs.manifest.path=$AZ_MANIFEST_ASSET" inputs.epochs=1 inputs.batch_size=4 \
+        limits.timeout=1800 --query name -o tsv)
+printf '%s\n' "$job" > "$work_dir/job-name"
+az ml job show "${workspace[@]}" --name "$job" --query status -o tsv
+```
+
+Repeat the status query until the job reaches a terminal state. If
+`job stream` reports `Incorrect padding`, continue with `job show`.
+That CLI error can occur while the remote job is still preparing.
+Use the job's **Outputs + logs** in Azure ML Studio or the workspace artifact
+datastore to inspect progress. After completion, download the named output:
+
+```bash
+az ml job download "${workspace[@]}" --name "$job" \
+  --output-name model_bundle --download-path "$work_dir/output"
+```
+
+For the default artifact datastore, the following commands recover the
+image-build log when it exists. Use the existing Blob authentication mode for
+that container. The smoke operator used `key` because their Entra data role
+was scoped to the input container. The CLI retrieved the key internally.
+
+```bash
+mapfile -t artifact_store < <(
+  az ml datastore show "${workspace[@]}" --name workspaceartifactstore \
+    --query '[account_name, container_name]' -o tsv
+)
+artifact_account="${artifact_store[0]}"
+artifact_container="${artifact_store[1]}"
+artifact_prefix="ExperimentRun/dcid.$job/"
+az storage blob list --auth-mode key --account-name "$artifact_account" \
+  --container-name "$artifact_container" --prefix "$artifact_prefix" \
+  --query '[].name' -o tsv
+az storage blob download --auth-mode key --account-name "$artifact_account" \
+  --container-name "$artifact_container" \
+  --name "${artifact_prefix}azureml-logs/20_image_build_log.txt" \
+  --file "$work_dir/image-build.log" -o none
+```
+
+If the named-output download reports a `BatchGetResolvedUrisDto` error,
+check the run's **Outputs + logs** for its output path. For the default
+placement used by this smoke, download the two files with Entra access to
+`workspaceblobstore` as follows.
+
+```bash
+mapfile -t output_store < <(
+  az ml datastore show "${workspace[@]}" --name workspaceblobstore \
+    --query '[account_name, container_name]' -o tsv
+)
+bundle="$work_dir/model_bundle"
+mkdir -p "$bundle"
+for file in metadata.json weights.pt; do
+  az storage blob download --auth-mode login --account-name "${output_store[0]}" \
+    --container-name "${output_store[1]}" --name "azureml/$job/model_bundle/$file" \
+    --file "$bundle/$file" -o none
+done
+AZUREML_MODEL_DIR="$bundle" python -c 'from modeling.score import init; init()'
+```
+
+In Azure ML Studio, compare the run's `manifest_sha256` parameter with
+`sha256sum` of the downloaded Blob manifest. For a CLI check, run the
+following in an authenticated project environment with `mlflow-skinny` and
+`azureml-mlflow` installed.
+
+```bash
+tracking_uri=$(az ml workspace show --subscription "$AZ_SUBSCRIPTION" \
+  --resource-group "$AZ_RESOURCE_GROUP" --name "$AZ_WORKSPACE" \
+  --query mlflow_tracking_uri -o tsv)
+MLFLOW_TRACKING_URI="$tracking_uri" python - "$job" <<'PYCODE'
+import sys
+from mlflow import MlflowClient
+
+run = MlflowClient().get_run(sys.argv[1])
+print(run.info.status, run.data.params["manifest_sha256"])
+print({key: run.data.metrics[key] for key in ("train_samples", "val_samples", "test_samples")})
+PYCODE
+```
+
+Check the existing job and experiment for an active run before resubmitting,
+including after an ambiguous CLI error.
+Stop here for Blob-to-train verification. The following sections cover
+separate manual retraining and deployment workflows.
+
+## Training and deployment
 
 For a manual HITL retraining job, register the manifest published after review
 approval as a new `uri_file` asset version and set `AZ_MANIFEST_ASSET` to that
@@ -69,21 +183,77 @@ az ml online-endpoint update "${workspace[@]}" --name "$AZ_ENDPOINT" --traffic "
 unset EKYC_SCORING_DEPLOYMENT
 ```
 
-Application logs record HTTP status and elapsed time. Application Insights is
-enabled on the deployment. To use [telemetry.kql](telemetry.kql), route
-`AmlOnlineEndpointTrafficLog` from the endpoint diagnostic settings into Log
-Analytics. [Azure endpoint monitoring](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-monitor-online-endpoints?view=azureml-api-2)
+## Managed staging verification and cleanup
 
-The orchestrator can enable traffic logs using an existing Log Analytics
-workspace. Set `AZ_LOG_ANALYTICS_ID` to its Azure resource ID.
+For a temporary staging test, keep the deployment-targeted header and one
+replica. Before provisioning, check the region's Azure ML VM sizes, family and
+total dedicated-core quota, and Linux retail rate. Set a teardown deadline.
+Use a genuine MIDV-2020 mock frame for the browser and serial benchmark.
+Keep the endpoint key in the proxy and benchmark process environment.
+
+Before sending test requests, have the orchestrator route both endpoint log
+categories to the same existing Log Analytics workspace. Set
+`AZ_LOG_ANALYTICS_ID` to the workspace resource ID. The resource-specific
+destination supplies the two named tables used by the queries. Application
+Insights remains enabled on the deployment.
+[Azure endpoint monitoring](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-monitor-online-endpoints?view=azureml-api-2)
 
 ```bash
 endpoint_id=$(az ml online-endpoint show "${workspace[@]}" --name "$AZ_ENDPOINT" --query id -o tsv)
 az monitor diagnostic-settings create --subscription "$AZ_SUBSCRIPTION" \
-  --name ekyc-traffic --resource "$endpoint_id" --workspace "$AZ_LOG_ANALYTICS_ID" \
+  --name ekyc-staging-logs --resource "$endpoint_id" --workspace "$AZ_LOG_ANALYTICS_ID" \
   --export-to-resource-specific true \
-  --logs '[{"category":"AmlOnlineEndpointTrafficLog","enabled":true}]'
+  --logs '[{"category":"AmlOnlineEndpointConsoleLog","enabled":true},{"category":"AmlOnlineEndpointTrafficLog","enabled":true}]'
 ```
+
+```bash
+export EKYC_SCORING_URL=$(az ml online-endpoint show "${workspace[@]}" \
+  --name "$AZ_ENDPOINT" --query scoring_uri -o tsv)
+export EKYC_SCORING_KEY=$(az ml online-endpoint get-credentials "${workspace[@]}" \
+  --name "$AZ_ENDPOINT" --query primaryKey -o tsv)
+export EKYC_SCORING_DEPLOYMENT=blue
+python -m demo.server --port 8081
+```
+
+Open http://127.0.0.1:8081 in a browser, upload the mock image, and check the
+rendered prediction and HTTP status. With the same environment, run scoring
+separately from the browser traffic and save the benchmark JSON.
+
+```bash
+python -m azure.benchmark --runs 100 --client-location "$CLIENT_LOCATION" \
+  --target-location japaneast scoring "$MOCK_IMAGE" --warmup 3
+```
+
+For low-confidence telemetry, use a mock fixture that scores strictly below
+the bundle's configured document threshold. Once both tables have ingested
+the test logs, set the endpoint name, deployment and UTC window in the
+[low-confidence rate query](telemetry-low-confidence.kql) and run it in the
+destination Log Analytics workspace. Each 15-minute UTC bucket divides the
+number of structured console events below threshold by the number of
+`POST /score` requests returning HTTP 200 in the traffic table. The result
+is a fraction and is null when the denominator is zero. On staging, the
+13:00 UTC bucket on 2026-11-23 had 3 events and 108 successful requests
+(2.78%). The denominator covers all successful scoring in that window,
+including warmups and browser checks. The review flag can also reflect missing
+or degraded quality. Use [telemetry.kql](telemetry.kql) for traffic volumes,
+failures and service-side latency.
+
+After testing, delete the dedicated staging endpoint and its deployment.
+Capture the Azure response confirming that the deployment and endpoint are
+gone, along with the UTC time. Retain the registered model and evidence.
+
+```bash
+az ml online-endpoint delete "${workspace[@]}" --name "$AZ_ENDPOINT" --yes
+az ml online-deployment show "${workspace[@]}" --endpoint-name "$AZ_ENDPOINT" \
+  --name blue --query provisioning_state -o tsv
+az ml online-endpoint show "${workspace[@]}" --name "$AZ_ENDPOINT" \
+  --query provisioning_state -o tsv
+date -u -Is
+unset EKYC_SCORING_KEY EKYC_SCORING_URL EKYC_SCORING_DEPLOYMENT
+```
+
+The two status checks should return resource-not-found after cleanup.
+A missing result caused by authentication or network failure needs a retry.
 
 ## Evidence collection
 
@@ -108,10 +278,24 @@ python -m azure.benchmark --runs 20 --client-location REGION_A --target-location
 ```
 
 Change `EKYC_SCORING_URL` and remove any previously set cloud credential when
-measuring local scoring. For regional comparison run from the same client
-location against both a same-region and a cross-region deployment with the
-same model, SKU, image and request count. Keep the warm-up and failures with
-each result. Scoring latency includes request setup, transport and decoding.
+measuring local scoring. The archived `staging-benchmark.json` measures the
+course workstation (Asia/Ho_Chi_Minh) to Japan East. All three warmups and all
+100 measured requests succeeded. For the 317,512-byte encoded request,
+measured p50 was 1,033.41 ms and p95 was 1,467.94 ms. These percentiles use
+successful measured requests, with warmups reported separately. Scoring
+latency includes request setup, transport and decoding.
+
+For a regional control, use the same approved Azure client in Japan East to
+measure Japan East, then a second approved region with the same available
+`Standard_DS2_v2` SKU. Match model bundle, inference environment, one replica,
+mock image, timeout, three warmups and 100 serial requests per target. Save
+both raw results with failures and run times. The staging run recorded six
+dedicated DSv2 cores and 20 dedicated cores total in Japan East. Before a
+future run, confirm available quota in each region, including any upgrade
+reserve for the SKU. Use sequential endpoint windows if only one staging
+deployment fits the approved budget. If the second region cannot support the
+matched SKU, keep the regional comparison pending.
+[Azure ML quota guidance](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-manage-quotas?view=azureml-api-2)
 
 The Blob mode needs `azure-identity` and `azure-storage-blob` and a credential
 with read, write and delete access to an existing container. It uses a
