@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="vi">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Duyệt ảnh · eKYC</title>
+<link rel="stylesheet" href="/demo.css">
+<div class="shell">
+  <aside class="sidebar">
+    <a class="brand" href="/"><span class="brand-mark" aria-hidden="true">✓</span> eKYC</a>
+    <nav aria-label="Điều hướng chính">
+      <a href="/">Kiểm tra giấy tờ</a><a href="/monitoring">Vận hành</a><a href="/review" aria-current="page">Duyệt ảnh</a>
+    </nav>
+  </aside>
+  <main>
+    <header class="heading">
+      <div><h1>Duyệt ảnh</h1><p>Xác nhận hoặc sửa nhãn cho ảnh trong lô duyệt.</p></div>
+      <span id="progress" class="blocks" role="status"></span>
+    </header>
+    <p id="status" role="status">Đang tải lô duyệt…</p>
+    <div class="grid split" id="work" hidden>
+      <section class="card">
+        <label for="task">Ảnh trong lô</label>
+        <select id="task"></select>
+        <img id="image" class="review-image" alt="Ảnh giấy tờ mô phỏng đang được duyệt">
+        <p id="prediction"></p>
+      </section>
+      <form class="card" id="review">
+        <h2>Nhãn sau khi duyệt</h2>
+        <p id="annotation"></p>
+        <div class="message"><label for="label">Loại giấy tờ</label>
+          <select id="label" required>
+            <option value="">Chọn loại giấy tờ</option><option>ID_Card</option><option>Passport</option>
+            <option value="Outside_Scope">Ngoài phạm vi</option>
+          </select>
+        </div>
+        <div class="message" id="quality-control"><label for="quality">Chất lượng</label>
+          <select id="quality" required>
+            <option value="">Chọn chất lượng</option><option value="Clear">Rõ</option><option value="Blur">Mờ</option>
+            <option value="Glare">Lóa</option><option value="Occluded">Bị che</option>
+          </select>
+        </div>
+        <div class="actions message"><button class="button primary">Lưu nhãn</button></div>
+        <p class="message" id="feedback" role="status"></p>
+      </form>
+    </div>
+  </main>
+</div>
+<script src="/demo/blocks.js"></script>
+<script>
+  const field = id => document.getElementById(id);
+  const task = field('task');
+  const label = field('label');
+  const quality = field('quality');
+  const save = field('review').querySelector('button');
+  let events = [];
+  let busy = false;
+  async function api(options) {
+    const response = await fetch('/api/review/tasks', options);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error);
+    return data;
+  }
+  function showQuality() {
+    const outside = label.value === 'Outside_Scope';
+    field('quality-control').hidden = outside;
+    quality.required = !outside;
+  }
+  function updateProgress() {
+    const reviewed = events.filter(event => event.annotation?.id).length;
+    field('progress').textContent = events.length
+      ? `${blockBar(reviewed / events.length)} · ${reviewed}/${events.length} ảnh đã lưu nhãn` : '';
+  }
+  function showTask() {
+    const event = events.find(entry => entry.event_id === task.value);
+    if (!event) return;
+    const annotation = event.annotation;
+    field('image').src = `/api/review/image/${event.event_id}`;
+    const result = event.prediction;
+    field('prediction').textContent = `Dự đoán ban đầu · ${result.label} · ${result.status ?? 'Chưa rõ chất lượng'} · ${(result.confidence * 100).toLocaleString('vi', {maximumFractionDigits: 1})}%`;
+    field('annotation').textContent = annotation?.conflict ? 'Có nhãn mâu thuẫn. Kiểm tra trong Label Studio.'
+      : annotation ? `Đã lưu · annotation #${annotation.id} · tài khoản #${annotation.reviewer?.id ?? annotation.reviewer ?? '—'}`
+      : event.available ? 'Chờ duyệt' : 'Ảnh chưa được nhập vào dự án Label Studio.';
+    label.value = annotation?.label ?? '';
+    quality.value = annotation?.quality ?? '';
+    save.disabled = label.disabled = quality.disabled = Boolean(annotation) || !event.available || busy;
+    showQuality();
+  }
+  label.onchange = showQuality;
+  task.onchange = () => {
+    field('feedback').textContent = '';
+    showTask();
+  };
+  field('review').onsubmit = async event => {
+    event.preventDefault();
+    if (busy || save.disabled) return;
+    const entry = events.find(item => item.event_id === task.value);
+    busy = task.disabled = save.disabled = label.disabled = quality.disabled = true;
+    try {
+      field('feedback').textContent = 'Đang lưu vào Label Studio…';
+      entry.annotation = await api({
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-EKYC-Review': '1'},
+        body: JSON.stringify({event_id: entry.event_id, label: label.value,
+          quality: label.value === 'Outside_Scope' ? null : quality.value})
+      });
+      updateProgress();
+      field('feedback').textContent = 'Đã lưu nhãn vào Label Studio.';
+    } catch (error) {
+      field('feedback').textContent = error.message;
+      label.disabled = quality.disabled = save.disabled = false;
+    } finally {
+      busy = task.disabled = false;
+      if (entry.annotation) showTask();
+    }
+  };
+  async function load() {
+    try {
+      ({events} = await api());
+      for (const event of events) {
+        task.add(new Option(event.source_image_id, event.event_id));
+      }
+      field('status').textContent = events.length ? '' : 'Lô này chưa có ảnh.';
+      field('work').hidden = !events.length;
+      updateProgress();
+      showTask();
+    } catch (error) {
+      field('status').textContent = error.message;
+    }
+  }
+  load();
+</script>
+</html>

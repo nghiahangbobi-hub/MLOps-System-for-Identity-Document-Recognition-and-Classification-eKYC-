@@ -5,7 +5,7 @@ import unittest
 
 from PIL import Image
 
-from data_pipeline.prepared_midv import SOURCES, SPLIT_RECORD, build
+from data_pipeline.prepared_midv import SOURCES, SPLITS, SPLIT_RECORD, build
 from data_pipeline.manifest import read_manifest
 
 
@@ -36,6 +36,10 @@ class PreparedMidvTests(unittest.TestCase):
         held_out = read_manifest(first / "held-out.csv")
         self.assertEqual(held_out, [row for row in rows if row["split"] == "test"])
         self.assertEqual(development, [row for row in rows if row["split"] != "test"])
+        for split in SPLITS:
+            self.assertEqual(read_manifest(first / f"{split}.csv"), [
+                row for row in rows if row["split"] == split
+            ])
 
     def test_rejects_incomplete_roster_and_duplicate_payload(self):
         photo = self.source / "photo/images/alb_id/01.jpg"

@@ -86,9 +86,13 @@ def build(source, output, frames_per_clip=3, min_frame_gap=10):
     with TemporaryDirectory(dir=output.parent, prefix=".midv-prepared-") as temporary:
         staging = Path(temporary) / "manifests"
         staging.mkdir(mode=0o700)
-        partitions = {"manifest.csv": rows,
-                      "development.csv": [row for row in rows if row["split"] != "test"],
-                      "held-out.csv": [row for row in rows if row["split"] == "test"]}
+        by_split = {split: [row for row in rows if row["split"] == split] for split in SPLITS}
+        partitions = {
+            "manifest.csv": rows,
+            "development.csv": [row for row in rows if row["split"] != "test"],
+            "held-out.csv": by_split["test"],
+            **{f"{split}.csv": partition for split, partition in by_split.items()},
+        }
         hashes = {}
         for name, partition in partitions.items():
             path = staging / name
