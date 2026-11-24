@@ -1,0 +1,30 @@
+// Run in the Log Analytics workspace receiving resource-specific endpoint logs.
+// Set the endpoint name, deployment and UTC window. Configure diagnostic
+// settings to route both console and traffic logs to the same workspace.
+let endpoint = "<endpoint-name>";
+let deployment = "blue";
+let windowEnd = now();
+let windowStart = windowEnd - 24h;
+let traffic = AmlOnlineEndpointTrafficLog
+| where TimeGenerated between (windowStart .. windowEnd)
+| where EndpointName =~ endpoint and DeploymentName =~ deployment
+| where Method =~ "POST" and Path == "/score" and ResponseCode == 200
+| summarize SuccessfulPredictions = count() by WindowStart = bin(TimeGenerated, 15m);
+let lowConfidence = AmlOnlineEndpointConsoleLog
+| where TimeGenerated between (windowStart .. windowEnd)
+| where tostring(split(_ResourceId, "/")[-1]) =~ endpoint and DeploymentName =~ deployment
+| where Message contains "ekyc.low_document_confidence"
+| extend Payload = parse_json(extract(@"(\{[^{}]*""event""\s*:\s*""ekyc\.low_document_confidence""[^{}]*\})\s*$", 1, Message))
+| where tostring(Payload.event) == "ekyc.low_document_confidence"
+| extend Confidence = todouble(Payload.confidence), Threshold = todouble(Payload.threshold)
+| where Confidence >= 0 and Threshold <= 1 and Confidence < Threshold
+| summarize LowConfidenceEvents = count() by WindowStart = bin(TimeGenerated, 15m);
+traffic
+| join kind=fullouter lowConfidence on WindowStart
+| extend WindowStart = coalesce(WindowStart, WindowStart1),
+         SuccessfulPredictions = coalesce(SuccessfulPredictions, 0),
+         LowConfidenceEvents = coalesce(LowConfidenceEvents, 0)
+| extend LowConfidenceRate = iff(SuccessfulPredictions > 0,
+    todouble(LowConfidenceEvents) / SuccessfulPredictions, real(null))
+| project WindowStart, SuccessfulPredictions, LowConfidenceEvents, LowConfidenceRate
+| order by WindowStart desc

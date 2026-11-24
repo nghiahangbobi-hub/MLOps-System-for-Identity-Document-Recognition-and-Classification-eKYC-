@@ -129,6 +129,26 @@ class HITLTests(unittest.TestCase):
         self.assertEqual(changes["0"]["after"]["label"], "Passport")
         self.assertEqual(changes["2"]["action"], "excluded")
 
+    def test_review_export_with_batch_specific_media_mount(self):
+        tasks = self.prepare_export()
+        batch_id = tasks[0]["data"]["batch_id"]
+        for task in tasks:
+            data = task["data"]
+            data["image"] = data["image"].replace(
+                "?d=images/", f"?d=hitl-midv-5gb-{batch_id[:12]}/images/", 1
+            )
+        raw = json_bytes(tasks)
+        self.export.write_bytes(raw)
+        self.assertEqual(self.approve()["export_sha256"], digest(raw))
+        self.assertTrue((self.publish() / "manifest.csv").is_file())
+
+        tasks[0]["data"]["image"] = tasks[0]["data"]["image"].replace(
+            f"hitl-midv-5gb-{batch_id[:12]}", "different-mount", 1
+        )
+        self.export.write_bytes(json_bytes(tasks))
+        with self.assertRaisesRegex(ValueError, "Export task does not match the batch"):
+            self.approve()
+
     def test_snapshot_rejects_corruption_or_wrong_source(self):
         event = self.event_dirs[0]
         path = event / "event.json"

@@ -153,15 +153,15 @@ def quality_metrics(outputs, targets, train_support):
     return {"status": status, "training_support": train_support, **result}
 
 
-def report_templates(raw_rows, targets, outputs):
-    if len(raw_rows) != targets.numel():
+def report_groups(raw_rows, targets, outputs, field):
+    if len(raw_rows) != targets.numel() or len(raw_rows) != outputs.size(0):
         raise ValueError("Evaluation rows differ from manifest records")
-    templates = {}
+    groups = {}
     for index, row in enumerate(raw_rows):
-        templates.setdefault(row["template_id"], []).append(index)
-    return {template: classification_metrics(targets[indices], outputs[indices, :len(DOCUMENT_LABELS)].argmax(1),
-                                             DOCUMENT_LABELS)
-            for template, indices in templates.items()}
+        groups.setdefault(row[field] or "", []).append(index)
+    predicted = outputs[:, :len(DOCUMENT_LABELS)].argmax(1)
+    return {group: classification_metrics(targets[indices], predicted[indices], DOCUMENT_LABELS)
+            for group, indices in groups.items()}
 
 
 def fit_candidate(name, splits, development, args, log):
@@ -279,7 +279,8 @@ def compare(args):
             "review_all": review_all, "retained_target": args.retained_target,
             "validation_coverage": coverage(confidence, correct, threshold, review_all),
             "validation_api_coverage": api_coverage(outputs, confidence, correct, threshold, review_all),
-            "validation_templates": report_templates([row for row in rows if split_of(row) == "val"], targets, outputs),
+            "validation_templates": report_groups(
+                [row for row in rows if split_of(row) == "val"], targets, outputs, "template_id"),
             "quality_training_support": support,
             "validation_quality": quality_metrics(outputs, best["qualities"], support),
         }
@@ -395,6 +396,13 @@ def evaluate(args):
         write_csv(combined, [{key: row.get(key, "") for key in fields} for row in (*dev_rows, *held_out)])
         splits = load_rows(combined, args.dataset_root)
     require_classes(splits["test"], "Held-out")
+    # Match load_rows' Outside_Scope exclusion and verify positional identity
+    # before claiming the one evaluation. The evaluation loader does not shuffle.
+    evaluated_rows = [row for row in held_out if (row.get("quality_status") or "").strip() != "Outside_Scope"]
+    expected_order = [(row["image_path"].strip(), DOCUMENT_LABELS.index(row["label"].strip()))
+                      for row in evaluated_rows]
+    if expected_order != [(path, label) for path, label, _ in splits["test"]]:
+        raise ValueError("Held-out dataset order differs from manifest records")
     os.environ["AZUREML_MODEL_DIR"] = str(bundle)
     score.init()
     # The exclusive marker also blocks concurrent or interrupted evaluations.
@@ -402,6 +410,8 @@ def evaluate(args):
     model, transform, metadata = score._predictor
     test_images = Images(args.dataset_root, splits["test"], IMAGE_SIZE, transform=transform)
     outputs, targets, qualities = predict(model.to(args.device), loader(test_images, args), args.device)
+    if targets.tolist() != [label for _, label in expected_order]:
+        raise ValueError("Held-out prediction targets differ from manifest order")
     temperature = metadata["document_temperature"]
     result, confidence, correct = document_metrics(outputs, targets, temperature)
     raw_calibration, _, _ = calibration(outputs[:, :len(DOCUMENT_LABELS)], targets, 1.0)
@@ -417,8 +427,10 @@ def evaluate(args):
         "api_coverage": api_coverage(outputs, confidence, correct,
                                      metadata["confidence_threshold"], metadata["document_review_all"]),
         "quality": quality_metrics(outputs, qualities, selection["quality_training_support"]),
-        "templates": report_templates(held_out, targets, outputs),
+        "templates": report_groups(evaluated_rows, targets, outputs, "template_id"),
     }
+    if "domain" in held_out[0]:
+        report["domains"] = report_groups(evaluated_rows, targets, outputs, "domain")
     write_json(output / "held-out.json", report)
     print(json.dumps({"accuracy": result["accuracy"], "macro_f1": result["macro_f1"],
                       "acceptance": report["acceptance"], "report": str(output / "held-out.json")}), flush=True)

@@ -1,20 +1,49 @@
-.agent-state/
-__pycache__/
+# Python environments and generated files
 .venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local configuration, credentials, and agent state
 .env
+.env.*
+!.env.example
+.azure/
+/.agent-state/
+/.codex/
+/AGENTS.md
+/ops/
+
+# Datasets and experiment output
 *.tar
-*.pt
 *.tar.*
+*.zip
+*.7z
+*.pt
 *.pth
 *.ckpt
 *.safetensors
 *.log
 mlruns/
-docs/*-evidence/
-docs/local-results.json
-docs/course-evidence.md
-docs/model-quality.md
-docs/release-verification.md
+runs/
+artifacts/
+
+# Private evidence and course deliverables
+/docs/
+/README.vi.md
+/azure/README.vi.md
+/azure/blob-storage*.md
+/azure/clean-room.md
+/azure/clean-room-inventory.sh
+/data_pipeline/SAMPLING.md
+/labeling/README.vi.md
+/modeling/QUALITY*.md
 *.docx
 *.pptx
 *.pdf
+
+# Read-only local MIDV sources
+/Data/

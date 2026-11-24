@@ -104,6 +104,15 @@ class ReviewQueue:
         sync_directory(self.root.parent)
         self.receipt_key = secrets.token_bytes(32)
 
+    def record_prediction(self, image, prediction):
+        digest = hashlib.sha256(image).hexdigest()
+        if digest not in self.allowlist:
+            return "not_allowlisted", None
+        if prediction["needs_review"]:
+            self.enqueue(digest, prediction, "needs_review", image=image)
+            return "queued", self.receipt(digest, prediction)
+        return "available", self.receipt(digest, prediction)
+
     def receipt(self, digest, prediction):
         body = json.dumps([digest, prediction], allow_nan=False).encode()
         signature = hmac.digest(self.receipt_key, body, "sha256")

@@ -165,6 +165,15 @@ def run(raw_data, request_headers=None):
         document_logits = document_logits.double() / temperature
     confidence, index = document_logits.softmax(dim=0).max(dim=0)
     confidence = confidence.item()
+    threshold = metadata["confidence_threshold"]
+    low_document_confidence = confidence < threshold
+    if low_document_confidence:
+        # The inference server routes stdout prints to its App Insights logger.
+        print(json.dumps({
+            "event": "ekyc.low_document_confidence",
+            "confidence": confidence,
+            "threshold": threshold,
+        }))
     status = None
     if metadata["has_quality_head"]:
         status = QUALITY_LABELS[logits[document_count:].argmax().item()]
@@ -173,5 +182,5 @@ def run(raw_data, request_headers=None):
         "status": status,
         "confidence": confidence,
         "needs_review": (status != "Clear" or metadata.get("document_review_all", False)
-                         or confidence < metadata["confidence_threshold"]),
+                         or low_document_confidence),
     }

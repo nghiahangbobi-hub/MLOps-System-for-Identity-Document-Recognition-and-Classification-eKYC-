@@ -1,7 +1,6 @@
 """Run from the repository root with python -m demo.server."""
 
 import argparse
-import hashlib
 import json
 import logging
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -80,15 +79,10 @@ class Handler(BaseHTTPRequestHandler):
             result = score(encode_image(image))
             status = 200
             if queue is not None:
-                digest = hashlib.sha256(image).hexdigest()
-                review_status = "not_allowlisted"
-                if digest in queue.allowlist:
-                    review_status = "available"
-                    if result["needs_review"]:
-                        queue.enqueue(digest, result, "needs_review", image=image)
-                        review_status = "queued"
-                    headers["X-EKYC-Report-Token"] = queue.receipt(digest, result)
+                review_status, token = queue.record_prediction(image, result)
                 headers["X-EKYC-Review-Status"] = review_status
+                if token is not None:
+                    headers["X-EKYC-Report-Token"] = token
         except ScoringError as exc:
             status = exc.status
             result = {"error": str(exc)}

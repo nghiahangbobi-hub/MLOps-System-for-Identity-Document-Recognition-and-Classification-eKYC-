@@ -8,6 +8,7 @@ import math
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -183,17 +184,33 @@ class ScoringTests(TemporaryFiles):
             settings = metadata(threshold=threshold)
             score._predictor = (lambda _: torch.zeros(1, 6), lambda _: tensor, settings)
             with self.subTest(threshold=threshold):
-                request = image_request()
-                result = score.run(request)
-                self.assertEqual(result, score.run(json.dumps(request).encode()))
+                request = {**image_request(), "image_id": "private-test-identity"}
+                with redirect_stdout(io.StringIO()) as stdout:
+                    result = score.run(request)
+                    self.assertEqual(result, score.run(json.dumps(request).encode()))
+                self.assertEqual([json.loads(line) for line in stdout.getvalue().splitlines()], [{
+                    "event": "ekyc.low_document_confidence",
+                    "confidence": 0.5,
+                    "threshold": threshold,
+                }] * (2 if expected else 0))
                 self.assertEqual(result["confidence"], 0.5)
                 self.assertEqual(result["needs_review"], expected)
         score._predictor = (lambda _: torch.tensor([[0., 0., 0., 1., 0., 0.]]),
                             lambda _: tensor, metadata(threshold=0))
-        self.assertTrue(score.run(image_request())["needs_review"])
+        with redirect_stdout(io.StringIO()) as stdout:
+            self.assertTrue(score.run(image_request())["needs_review"])
+        self.assertEqual(stdout.getvalue(), "")
         score._predictor = (lambda _: torch.zeros(1, 2), lambda _: tensor, metadata(False, 0))
-        self.assertIsNone(score.run(image_request())["status"])
-        self.assertTrue(score.run(image_request())["needs_review"])
+        with redirect_stdout(io.StringIO()) as stdout:
+            result = score.run(image_request())
+            self.assertIsNone(result["status"])
+            self.assertTrue(result["needs_review"])
+        self.assertEqual(stdout.getvalue(), "")
+        settings = {**metadata(threshold=0.5), "document_review_all": True}
+        score._predictor = (lambda _: torch.zeros(1, 6), lambda _: tensor, settings)
+        with redirect_stdout(io.StringIO()) as stdout:
+            self.assertTrue(score.run(image_request())["needs_review"])
+        self.assertEqual(stdout.getvalue(), "")
 
     def test_rejects_missing_ambiguous_and_malformed_bundles(self):
         with self.assertRaisesRegex(RuntimeError, "found 0"):

@@ -82,10 +82,11 @@ def parse_manifest(reader: csv.DictReader) -> list[dict[str, str]]:
     return rows
 
 
-def write_manifest(path: Path, rows: list[dict[str, str]], *, quality_source: bool = False) -> None:
-    fields = (*FIELDS, "quality_source") if quality_source or any(
-        "quality_source" in row for row in rows
-    ) else FIELDS
+def write_manifest(path, rows, *, quality_source=False, fields=None):
+    if fields is None:
+        fields = (*FIELDS, "quality_source") if quality_source or any(
+            "quality_source" in row for row in rows
+        ) else FIELDS
     with path.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()

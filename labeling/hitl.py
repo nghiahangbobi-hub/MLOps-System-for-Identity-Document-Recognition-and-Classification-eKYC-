@@ -222,8 +222,16 @@ def read_reviews(raw, batch):
     for task in tasks:
         data = task.get("data") if isinstance(task, dict) else None
         event_id = data.get("event_id") if isinstance(data, dict) else None
-        if not isinstance(event_id, str) or event_id not in expected or any(
-            data.get(key) != value for key, value in expected[event_id].items()
+        if not isinstance(event_id, str) or event_id not in expected:
+            raise ValueError("Export task does not match the batch")
+        expected_data = expected[event_id]
+        image = expected_data["image"]
+        # Extracted-sample imports mount each batch below a project media prefix.
+        mounted_image = image.replace(
+            "?d=images/", f"?d=hitl-midv-5gb-{batch['batch_id'][:12]}/images/", 1
+        )
+        if data.get("image") not in (image, mounted_image) or any(
+            data.get(key) != value for key, value in expected_data.items() if key != "image"
         ):
             raise ValueError("Export task does not match the batch")
         annotations = task.get("annotations", [])

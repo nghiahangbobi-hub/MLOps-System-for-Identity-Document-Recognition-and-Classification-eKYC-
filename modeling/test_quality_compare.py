@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import torch
+from PIL import Image
 
 from . import quality_compare as qc
 from . import score
@@ -136,6 +137,72 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             qc.claim_evaluation(self.root, "second")
         self.assertEqual(json.loads((self.root / "held-out.started").read_text())["held_out_sha256"], "first")
+
+    def test_evaluate_groups_interleaved_domains_in_one_pass(self):
+        for with_domain in (True, False):
+            with self.subTest(with_domain=with_domain):
+                output = self.root / str(with_domain)
+                bundle = output / "bundle"
+                bundle.mkdir(parents=True)
+                development = [row("train-a", "train"), row("train-b", "train", "Passport"),
+                               row("validation", "val")]
+                held_out = [row("z", "test"), row("a", "test", "Passport"),
+                            row("excluded", "test"), row("y", "test", "Passport"),
+                            row("b", "test")]
+                held_out[2]["quality_status"] = "Outside_Scope"
+                if with_domain:
+                    for record, domain in zip([*development, *held_out],
+                                              ["clips", "clips", "clips",
+                                               "photo", "clips", "excluded", "photo", "clips"]):
+                        record["domain"] = domain
+                for index, record in enumerate([*development, *held_out]):
+                    if record["quality_status"] != "Outside_Scope":
+                        predicted_passport = record["image_id"] == "y"
+                        Image.new("RGB", (3, 3), (int(predicted_passport), index, 0)).save(
+                            output / record["image_path"], format="PNG")
+                qc.write_csv(output / "development.csv", development)
+                qc.write_csv(output / "holdout.csv", held_out)
+                qc.write_csv(output / "base.csv", [*development, *held_out])
+                (bundle / "metadata.json").touch()
+                (bundle / "weights.pt").touch()
+                selection = output / "selection.json"
+                qc.write_json(selection, {
+                    "selection_schema": 1, "seed": qc.SEED, "selected": "frozen", "selected_epoch": 1,
+                    "approval_lineage": None, "quality_training_support": dict.fromkeys(QUALITY_LABELS, 0),
+                    "held_out_sha256": qc.sha256(output / "holdout.csv"),
+                    "development_sha256": qc.sha256(output / "development.csv"),
+                    "metadata_sha256": qc.sha256(bundle / "metadata.json"),
+                    "weights_sha256": qc.sha256(bundle / "weights.pt"),
+                })
+                qc.write_json(output / "sealed.json", {"selection_sha256": qc.sha256(selection)})
+                settings = {"document_temperature": 1.0, "confidence_threshold": 0.5,
+                            "document_review_all": False}
+                model = torch.nn.Identity()
+
+                def transform(image):
+                    passport = image.getpixel((0, 0))[0]
+                    return torch.tensor([1.0 - passport, float(passport)])
+
+                options = SimpleNamespace(output=output, dataset_root=output,
+                                          held_out=output / "holdout.csv", base_manifest=output / "base.csv",
+                                          device=torch.device("cpu"), batch_size=2, workers=0)
+                with patch.dict("os.environ"), patch.object(score, "init"), \
+                        patch.object(score, "_predictor", (model, transform, settings)), \
+                        patch.object(qc, "predict", wraps=qc.predict) as predict:
+                    qc.evaluate(options)
+                    predict.assert_called_once()
+                result = json.loads((output / "held-out.json").read_text())
+                self.assertEqual(result["document"]["samples"], 4)
+                self.assertNotIn("excluded", result["templates"])
+                if with_domain:
+                    self.assertEqual(set(result["domains"]), {"photo", "clips"})
+                    photo, clips = (result["domains"][name] for name in ("photo", "clips"))
+                    self.assertEqual(photo["confusion_true_rows_predicted_columns"], [[1, 0], [0, 1]])
+                    self.assertEqual(clips["confusion_true_rows_predicted_columns"], [[1, 0], [1, 0]])
+                    self.assertEqual(photo["macro_f1"], 1.0)
+                    self.assertEqual(clips["per_class_support"], {"ID_Card": 1, "Passport": 1})
+                else:
+                    self.assertNotIn("domains", result)
 
     def test_approved_version_rebuild_rejects_tampered_lineage(self):
         base = self.root / "base.csv"
