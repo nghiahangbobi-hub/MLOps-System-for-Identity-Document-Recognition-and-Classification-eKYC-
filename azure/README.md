@@ -113,6 +113,12 @@ export EKYC_SCORING_DEPLOYMENT=blue
 python -m demo.server --port 8081
 ```
 
+Trong menu demo, chọn **Vận hành** để xem số liệu. Để bật số liệu Azure,
+cấu hình diagnostic logs theo phần Monitoring bên dưới. Sau đó đặt
+`EKYC_LOG_ANALYTICS_WORKSPACE` thành **Workspace ID** (GUID), export `AZ_ENDPOINT`
+và `EKYC_SCORING_DEPLOYMENT` (mặc định `blue`) trước khi chạy demo.
+Nút **Tải tỷ lệ độ tin cậy thấp** dùng Azure CLI đã đăng nhập và có quyền đọc workspace.
+
 Mở http://127.0.0.1:8081, gửi ảnh và kiểm tra dự đoán cùng trạng thái HTTP. Đặt `MOCK_IMAGE` là đường dẫn ảnh, `CLIENT_LOCATION` là vị trí thực của máy đo. Đo riêng với lưu lượng trình duyệt và lưu JSON kết quả.
 
 ```bash

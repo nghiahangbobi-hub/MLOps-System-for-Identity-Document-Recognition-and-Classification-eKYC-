@@ -1,44 +1,47 @@
 <!doctype html>
-<html lang="en">
+<html lang="vi">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>eKYC document check</title>
-<style>
-  * { box-sizing: border-box; }
-  body { margin: 0; background: #f0f4f2; color: #182d27; font: 1rem/1.55 system-ui, sans-serif; }
-  main { width: min(38rem, calc(100% - 2rem)); margin: clamp(1rem, 10vh, 6rem) auto;
-         background: white; border: 1px solid #ccd9d2; border-radius: 1rem; padding: clamp(1.2rem, 5vw, 2.75rem); }
-  h1 { margin: 0; font-size: clamp(1.7rem, 5vw, 2.4rem); letter-spacing: -.035em; }
-  label, button { display: block; font-weight: 650; }
-  input { display: block; max-width: 100%; margin: .5rem 0 1.25rem; font: inherit; }
-  button { padding: .65rem 1rem; border: 0; border-radius: .45rem; color: white; background: #1d604a; font-size: 1rem; }
-  button:disabled { opacity: .6; }
-  button[hidden] { display: none; }
-  #report { margin-top: 1rem; }
-  #message:empty { display: none; }
-  dl { margin-bottom: 0; }
-  dl div { display: flex; justify-content: space-between; gap: 1rem; border-top: 1px solid #ccd9d2; padding: .6rem 0; }
-  dd { margin: 0; overflow-wrap: anywhere; text-align: right; font-weight: 650; }
-</style>
-<main>
-  <h1>eKYC document check</h1>
-  <p>Upload a synthetic ID card or passport image to check its document type and image quality.</p>
-  <form>
-    <label for="image">Image <small>(JPEG or PNG, up to 8 MiB)</small></label>
-    <input id="image" type="file" accept="image/jpeg,image/png" required>
-    <button>Check document</button>
-  </form>
-  <section aria-live="polite" aria-label="Scoring result">
-    <p id="message"></p>
-    <dl id="result" hidden>
-      <div><dt>Document type</dt><dd id="label"></dd></div>
-      <div><dt>Image quality</dt><dd id="status"></dd></div>
-      <div><dt>Confidence</dt><dd id="confidence"></dd></div>
-      <div><dt>Review needed</dt><dd id="needs_review"></dd></div>
-    </dl>
-    <button id="report" type="button" hidden>Report incorrect prediction</button>
-  </section>
-</main>
+<title>Kiểm tra giấy tờ · eKYC</title>
+<link rel="stylesheet" href="/demo.css">
+<div class="shell">
+  <aside class="sidebar">
+    <a class="brand" href="/"><span class="brand-mark" aria-hidden="true">✓</span> eKYC</a>
+    <nav aria-label="Điều hướng chính"><a href="/" aria-current="page">Kiểm tra giấy tờ</a><a href="/monitoring">Vận hành</a></nav>
+  </aside>
+  <main>
+    <header class="heading">
+      <div><h1>Kiểm tra giấy tờ</h1><p>Phân loại thẻ định danh hoặc hộ chiếu mô phỏng và kiểm tra chất lượng ảnh.</p></div>
+    </header>
+    <div class="grid split">
+      <form class="card">
+        <h2>Ảnh giấy tờ</h2>
+        <label class="dropzone">
+          <span class="upload-icon" id="upload-icon" aria-hidden="true">↑</span>
+          <img id="preview" alt="Xem trước ảnh giấy tờ đã chọn" hidden>
+          <strong id="filename">Chọn ảnh</strong>
+          <small>JPEG hoặc PNG · tối đa 8 MiB</small>
+          <input id="image" type="file" aria-label="Chọn ảnh giấy tờ" accept="image/jpeg,image/png" required>
+        </label>
+        <button class="button primary">Kiểm tra ảnh</button>
+      </form>
+      <section class="card" aria-live="polite" aria-label="Kết quả dự đoán">
+        <div class="card-head"><h2>Kết quả dự đoán</h2><span id="review-pill" class="pill" hidden></span></div>
+        <p id="empty">Kết quả sẽ xuất hiện sau khi bạn kiểm tra ảnh.</p>
+        <div id="result" hidden>
+          <dl class="result-list">
+            <div><dt>Loại giấy tờ</dt><dd id="label"></dd></div>
+            <div><dt>Chất lượng ảnh</dt><dd id="status"></dd></div>
+            <div><dt>Độ tin cậy</dt><dd id="confidence" class="blocks"></dd></div>
+          </dl>
+        </div>
+        <p id="message" class="message" role="status"></p>
+        <div class="actions message"><button id="report" class="button" type="button" hidden>Báo dự đoán sai</button></div>
+      </section>
+    </div>
+  </main>
+</div>
+<script src="/demo/blocks.js"></script>
 <script>
   const form = document.querySelector('form');
   const button = form.querySelector('button');
@@ -46,27 +49,50 @@
   const message = document.querySelector('#message');
   const reportButton = document.querySelector('#report');
   const imageInput = document.querySelector('#image');
+  const preview = document.querySelector('#preview');
+  const reviewPill = document.querySelector('#review-pill');
+  const empty = document.querySelector('#empty');
   let reportToken = null;
+  let previewUrl;
 
-  imageInput.addEventListener('change', () => {
+  function clearResult() {
+    result.hidden = true;
+    empty.hidden = false;
     reportToken = null;
     reportButton.hidden = true;
-    result.hidden = true;
+    reviewPill.hidden = true;
+  }
+
+  imageInput.addEventListener('change', () => {
+    clearResult();
     message.textContent = '';
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    const image = imageInput.files[0];
+    document.querySelector('#filename').textContent = image?.name ?? 'Chọn ảnh';
+    const canPreview = image && ['image/jpeg', 'image/png'].includes(image.type)
+      && image.size > 0 && image.size <= 8 * 1024 * 1024;
+    preview.hidden = !canPreview;
+    document.querySelector('#upload-icon').hidden = Boolean(canPreview);
+    if (canPreview) {
+      previewUrl = URL.createObjectURL(image);
+      preview.src = previewUrl;
+    } else {
+      preview.removeAttribute('src');
+      previewUrl = null;
+    }
   });
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    result.hidden = true;
-    reportToken = null;
-    reportButton.hidden = true;
-    message.textContent = 'Checking document…';
+    clearResult();
+    empty.hidden = true;
+    message.textContent = 'Đang kiểm tra ảnh…';
     button.disabled = true;
     imageInput.disabled = true;
     try {
       const image = imageInput.files[0];
       if (!image || !image.size || image.size > 8 * 1024 * 1024) {
-        throw new Error('Choose an image between 1 byte and 8 MiB.');
+        throw new Error('Chọn ảnh có dung lượng từ 1 byte đến 8 MiB.');
       }
       const response = await fetch('/predict', {
         method: 'POST', headers: { 'Content-Type': image.type }, body: image
@@ -74,23 +100,25 @@
       const prediction = await response.json();
       if (!response.ok) throw new Error(prediction.error);
       const fields = {
-        label: prediction.label,
-        status: prediction.status ?? 'Unavailable',
+        label: ({ID_Card: 'Thẻ định danh', Passport: 'Hộ chiếu'})[prediction.label] ?? prediction.label,
+        status: ({Clear: 'Rõ', Blur: 'Mờ', Glare: 'Lóa', Occluded: 'Bị che'})[prediction.status] ?? 'Chưa có kết quả',
         confidence: typeof prediction.confidence === 'number'
-          ? new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 }).format(prediction.confidence)
-          : 'Unavailable',
-        needs_review: prediction.needs_review ? 'Yes' : 'No'
+          ? blockBar(prediction.confidence)
+          : 'Chưa có kết quả'
       };
       for (const [field, value] of Object.entries(fields)) {
         document.getElementById(field).textContent = value;
       }
       result.hidden = false;
+      reviewPill.textContent = prediction.needs_review ? 'Cần duyệt' : 'Không cần duyệt';
+      reviewPill.dataset.state = prediction.needs_review ? 'warn' : 'good';
+      reviewPill.hidden = false;
       reportToken = response.headers.get('X-EKYC-Report-Token');
       reportButton.hidden = !reportToken;
       const reviewStatus = response.headers.get('X-EKYC-Review-Status');
       message.textContent = ({
-        queued: 'Added to the review queue.',
-        not_allowlisted: 'This image is outside the mock review allowlist.'
+        queued: 'Đã đưa ảnh vào hàng đợi duyệt.',
+        not_allowlisted: 'Ảnh này không thuộc bộ ảnh mô phỏng được phép đưa vào hàng đợi.'
       })[reviewStatus] ?? '';
     } catch (error) {
       message.textContent = error.message;
@@ -112,7 +140,7 @@
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error);
-      message.textContent = 'Incorrect prediction reported.';
+      message.textContent = 'Đã gửi báo cáo.';
       reportToken = null;
       reportButton.hidden = true;
     } catch (error) {
@@ -124,3 +152,4 @@
     }
   });
 </script>
+</html>

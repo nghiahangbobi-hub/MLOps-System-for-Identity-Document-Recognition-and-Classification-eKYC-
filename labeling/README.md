@@ -9,7 +9,7 @@ hoặc thư mục `batch` khi duyệt dự đoán. Chạy container ở terminal
 runtime=docker # Hoặc podman
 media_root="$(realpath /path/to/media-root)"
 "$runtime" volume create ekyc-label-studio
-"$runtime" run --rm -p 127.0.0.1:8082:8080 \
+"$runtime" run --rm -p 127.0.0.1:8080:8080 \
   -v ekyc-label-studio:/label-studio/data \
   -v "$media_root:/label-studio/media:ro" \
   -e LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true \
@@ -17,7 +17,7 @@ media_root="$(realpath /path/to/media-root)"
   docker.io/heartexlabs/label-studio@sha256:844f82c5b08de3f77a57c66f480e0036d3c76c6eff53699e8d47686613faa922
 ```
 
-Mở [Label Studio](http://127.0.0.1:8082). Nếu SELinux chặn mount ảnh, dùng
+Mở [Label Studio](http://127.0.0.1:8080). Nếu SELinux chặn mount ảnh, dùng
 bản sao lô riêng và thêm `,Z` sau `:ro` trong tùy chọn mount.
 
 ## Gán nhãn chất lượng ban đầu
@@ -53,10 +53,10 @@ Khởi động [API suy luận](../README.md#3-chạy-api-và-demo) trước.
 Ví dụ sau dùng đầu ra từ bộ MIDV đã giải nén. Đổi đường dẫn theo lần chạy.
 
 ```bash
-dataset="$PWD/Data/MIDV2020_sample_5GB"
-base_manifest="$PWD/runs/midv-5gb/inputs/manifest.csv"
-mkdir -p runs
-work=$(mktemp -d "$PWD/runs/review.XXXXXX")
+dataset=/path/to/MIDV2020_sample_5GB
+run="$HOME/.local/share/mlops-ekyc/runs/midv-5gb"
+base_manifest="$run/inputs/manifest.csv"
+work=$(mktemp -d "$run/review.XXXXXX")
 python - "$dataset" "$base_manifest" "$work/allowlist.csv" <<'PYCODE'
 import csv
 import sys
@@ -76,14 +76,14 @@ PYCODE
 ```
 
 ```bash
-export EKYC_SCORING_URL=http://127.0.0.1:5001/score
-python -m demo.server --port 8081 \
+export EKYC_SCORING_URL=http://127.0.0.1:5002/score
+python -m demo.server --monitoring-threshold "${EKYC_MONITORING_THRESHOLD:-0.7}" \
   --review-queue "$work/queue" \
   --review-manifest "$work/allowlist.csv" \
   --review-dataset-root "$dataset"
 ```
 
-Mở [demo cục bộ](http://127.0.0.1:8081), chọn ảnh mô phỏng trong manifest và gửi dự đoán. Khi API trả `needs_review=true`, demo lưu ảnh và dự đoán vào hàng đợi. Nút **Report incorrect prediction** thêm lý do báo sai. Các lần gửi cùng ảnh dùng chung sự kiện theo SHA-256. Có thể thử lại khi lỗi ghi hàng đợi. Sau khi khởi động lại demo, gửi dự đoán mới để lấy mã báo sai hiện hành. Sự kiện đã lưu vẫn còn.
+Mở [demo cục bộ](http://127.0.0.1:8081), chọn ảnh mô phỏng trong manifest và gửi dự đoán. Khi API trả `needs_review=true`, demo lưu ảnh và dự đoán vào hàng đợi. Nút **Báo dự đoán sai** thêm lý do báo sai. Các lần gửi cùng ảnh dùng chung sự kiện theo SHA-256. Có thể thử lại khi lỗi ghi hàng đợi. Sau khi khởi động lại demo, gửi dự đoán mới để lấy mã báo sai hiện hành. Sự kiện đã lưu vẫn còn.
 
 ## Chuyển lô ảnh sang Label Studio
 
@@ -124,3 +124,25 @@ python -m modeling.train --dataset-root "$dataset" \
 ```
 
 Lưu ID của lần huấn luyện, mã phiên bản, hash manifest và số mẫu chất lượng ảnh. Đánh giá mô hình chất lượng cần nhãn người duyệt ở tập đánh giá. Nghiệm thu cần người thật duyệt lô ảnh và người vận hành chạy kiểm tra Azure.
+
+## Duyệt trong webapp
+
+Webapp dùng lô đã tạo và dự án Label Studio đã nhập tác vụ theo các bước trên.
+Sau khi cấu hình hàng đợi và máy chủ chấm điểm như trên, bổ sung
+`--review-batch "$work/batch" --label-studio-project "$project_id"`
+vào lệnh chạy demo. `EKYC_LABEL_STUDIO_URL` mặc định là
+`http://127.0.0.1:8080`. Khi trình duyệt hỏi đăng nhập, nhập email và mật khẩu
+của tài khoản Label Studio có quyền trên dự án. Có thể đặt
+`EKYC_LABEL_STUDIO_EMAIL` và `EKYC_LABEL_STUDIO_PASSWORD` ở máy chủ để
+Monitoring đọc trạng thái lô.
+
+Nếu chạy ở chế độ token, đặt `EKYC_LABEL_STUDIO_TOKEN` cho tài khoản ghi nhãn
+và thêm `EKYC_LABEL_STUDIO_TOKEN_TYPE=personal` nếu dùng PAT. Ở chế độ này,
+hộp thoại dùng `EKYC_REVIEW_USER` (mặc định `reviewer`) và
+`EKYC_REVIEW_PASSWORD` của demo.
+
+Mở [Vận hành → Duyệt ảnh](http://127.0.0.1:8081/review). Chọn ảnh, sửa nhãn
+và bấm **Lưu nhãn**. Trang hiển thị ID annotation và tài khoản Label Studio
+ghi nhãn. Nếu ảnh mới vào
+hàng đợi sau khi tạo lô, tạo lô mới trước khi duyệt. Sau khi ghi nhãn xong,
+xuất JSON từ Label Studio rồi chạy bước phê duyệt và tạo phiên bản ở trên.

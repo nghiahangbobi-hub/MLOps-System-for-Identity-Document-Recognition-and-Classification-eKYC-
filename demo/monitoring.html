@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="vi">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vận hành · eKYC</title>
+<link rel="stylesheet" href="/demo.css">
+<div class="shell">
+  <aside class="sidebar">
+    <a class="brand" href="/"><span class="brand-mark" aria-hidden="true">✓</span> eKYC</a>
+    <nav aria-label="Điều hướng chính"><a href="/">Kiểm tra giấy tờ</a><a href="/monitoring" aria-current="page">Vận hành</a></nav>
+  </aside>
+  <main>
+    <header class="heading">
+      <div><h1>Vận hành eKYC</h1><p>Theo dõi dự đoán, job huấn luyện và build CI.</p></div>
+      <div class="controls">
+        <span class="pill terminal-status" id="connection" role="status">Đang kết nối</span>
+        <label for="window">Khoảng thời gian</label>
+        <select id="window"><option value="15m">15 phút</option><option value="1h" selected>1 giờ</option><option value="24h">24 giờ</option></select>
+      </div>
+    </header>
+    <section class="grid kpis" aria-label="Chỉ số dự đoán qua demo">
+      <dl class="card"><dt>Lượt dự đoán</dt><dd id="total">—</dd><small id="latest"></small></dl>
+      <dl class="card focus"><dt>Dưới ngưỡng tin cậy</dt><dd id="low">—</dd><small id="threshold"></small></dl>
+      <dl class="card"><dt>Thành công trong 3 giây</dt><dd id="within-sla">—</dd><small id="sla-count"></small></dl>
+      <dl class="card"><dt>Yêu cầu lỗi</dt><dd id="errors">—</dd><small id="error-count"></small></dl>
+    </section>
+    <div class="monitor-stack">
+      <section class="card">
+        <div class="card-head"><div><h2>Luồng dự đoán</h2><p>20 yêu cầu gần nhất trong khoảng đang chọn · thời gian đo tại máy chủ demo</p></div></div>
+        <p id="event-empty">Đang chờ sự kiện…</p>
+        <div class="table-scroll"><table id="events" hidden>
+          <thead><tr><th>Thời điểm</th><th>Phản hồi</th><th>Độ trễ</th><th>Độ tin cậy</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </section>
+      <section class="card">
+        <div class="card-head">
+          <div><h2>Azure ML Jobs</h2><p id="azure-state">Đang kết nối…</p></div>
+          <button type="button" class="button" id="reload-azure">Làm mới</button>
+        </div>
+        <div id="azure-runs"></div>
+      </section>
+      <section class="card">
+        <div class="card-head">
+          <div><h2>Build cục bộ</h2><p id="builds-state">Đang kết nối…</p></div>
+          <button type="button" class="button" id="reload-builds">Làm mới</button>
+        </div>
+        <div id="builds-runs"></div>
+      </section>
+      <section class="card">
+        <div class="card-head">
+          <div><h2>Build CI · GitHub Actions</h2><p id="github-state">Đang kết nối…</p></div>
+          <button type="button" class="button" id="reload-github">Làm mới</button>
+        </div>
+        <div id="github-runs"></div>
+      </section>
+      <div class="grid split">
+        <section class="card">
+          <div class="card-head"><div><h2>Hàng đợi duyệt</h2><p><strong id="queued">—</strong> <span id="queue-label">ảnh đã vào hàng đợi (tổng)</span></p></div></div>
+          <p id="review-summary" role="status">Đang tải trạng thái lô duyệt…</p>
+          <div class="actions">
+            <a id="review-link" href="/review" class="button" hidden>Duyệt ảnh</a>
+            <a id="label-studio" class="button" hidden>Mở dự án Label Studio</a>
+          </div>
+        </section>
+        <section class="card">
+          <div class="card-head"><div><h2>Azure Log Analytics</h2><p id="analytics-state" role="status">Đang kiểm tra cấu hình…</p></div></div>
+          <button type="button" class="button" id="analytics" hidden>Tải tỷ lệ độ tin cậy thấp</button>
+        </section>
+      </div>
+    </div>
+    <dialog id="log-panel" class="log-panel" aria-labelledby="log-title">
+      <div class="card-head"><h2 id="log-title"></h2><button class="button" type="button" id="close-log" autofocus>Đóng log</button></div>
+      <p role="status" id="log-state"></p>
+      <pre id="log" tabindex="0" aria-label="Nội dung log"></pre>
+    </dialog>
+  </main>
+</div>
+<script>
+  const field = id => document.getElementById(id);
+  const timeWindow = field('window');
+  const percent = new Intl.NumberFormat('vi', {style: 'percent', maximumFractionDigits: 1});
+  const dateTime = new Intl.DateTimeFormat('vi', {dateStyle: 'short', timeStyle: 'medium'});
+  const ratio = (count, total) => total ? percent.format(count / total) : '—';
+  const counts = (count, total) => total ? `${count}/${total} lượt` : 'Chưa có dữ liệu';
+  const analytics = field('analytics');
+  let live;
+  let logStream;
+
+  function text(id, value) { field(id).textContent = value; }
+  function element(tag, content) {
+    const node = document.createElement(tag);
+    if (content !== undefined) node.textContent = content;
+    return node;
+  }
+  function pill(label, state) {
+    const node = element('span', label);
+    node.className = 'pill';
+    node.dataset.state = state;
+    return node;
+  }
+  function table(headings, rows) {
+    const node = element('table');
+    const head = node.createTHead().insertRow();
+    for (const label of headings) {
+      const cell = element('th', label);
+      cell.scope = 'col';
+      head.append(cell);
+    }
+    node.append(rows);
+    const wrapper = element('div');
+    wrapper.className = 'table-scroll';
+    wrapper.append(node);
+    return wrapper;
+  }
+  function addRow(body, values) {
+    const row = body.insertRow();
+    for (const value of values) row.insertCell().append(value ?? '—');
+  }
+  function when(value) {
+    if (!value) return '—';
+    const date = new Date(value);
+    return Number.isNaN(date.valueOf()) ? '—' : dateTime.format(date);
+  }
+  async function api(path) {
+    const response = await fetch(path);
+    if (!response.ok) throw new Error('Source unavailable');
+    return response.json();
+  }
+
+  function update(metrics) {
+    text('total', metrics.total);
+    text('latest', metrics.latest ? `Gần nhất · HTTP ${metrics.latest[0]}` : 'Chưa có yêu cầu');
+    text('low', ratio(metrics.low, metrics.scored));
+    text('threshold', `${counts(metrics.low, metrics.scored)} · ngưỡng ${percent.format(metrics.threshold)}`);
+    text('within-sla', ratio(metrics.within_sla, metrics.total));
+    text('sla-count', counts(metrics.within_sla, metrics.total));
+    text('errors', ratio(metrics.errors, metrics.total));
+    text('error-count', counts(metrics.errors, metrics.total));
+    text('queued', metrics.queued ?? 'Chưa cấu hình');
+    field('queue-label').hidden = metrics.queued === null;
+    const projectUrl = metrics.label_studio_project_url;
+    field('review-link').hidden = !projectUrl;
+    field('label-studio').hidden = !projectUrl;
+    if (projectUrl) field('label-studio').href = projectUrl;
+    if (analytics.hidden && metrics.azure_configured) text('analytics-state', 'Số liệu từ endpoint đã cấu hình.');
+    if (!metrics.azure_configured) text('analytics-state', 'Chưa cấu hình Log Analytics.');
+    analytics.hidden = !metrics.azure_configured;
+    const rows = field('events').tBodies[0];
+    rows.replaceChildren();
+    for (const [at, status, latency, confidence] of metrics.recent) {
+      addRow(rows, [when(at * 1000), pill(`HTTP ${status}`, status === 200 ? 'good' : 'bad'),
+        `${Math.round(latency)} ms`, confidence === null ? '—' : percent.format(confidence)]);
+    }
+    field('events').hidden = !metrics.recent.length;
+    field('event-empty').hidden = Boolean(metrics.recent.length);
+    text('event-empty', 'Chưa có yêu cầu trong khoảng này.');
+  }
+
+  function connect() {
+    live?.close();
+    text('connection', '[~] Đang kết nối');
+    field('connection').dataset.state = 'warn';
+    live = new EventSource(`/api/monitoring/live?window=${timeWindow.value}`);
+    live.addEventListener('snapshot', event => {
+      update(JSON.parse(event.data));
+      text('connection', '[+] Trực tiếp');
+      field('connection').dataset.state = 'good';
+    });
+    live.onerror = () => {
+      text('connection', '[~] Đang kết nối lại');
+      field('connection').dataset.state = 'warn';
+    };
+  }
+
+  analytics.onclick = async () => {
+    const window = timeWindow.value;
+    analytics.disabled = true;
+    text('analytics-state', 'Đang tải…');
+    try {
+      const {low, scored} = await api(`/api/monitoring/azure?window=${window}`);
+      if (timeWindow.value === window) text('analytics-state', scored
+        ? `${ratio(low, scored)} độ tin cậy thấp · ${counts(low, scored)}`
+        : `Chưa có lượt dự đoán thành công · ${low} sự kiện độ tin cậy thấp`);
+    } catch {
+      if (timeWindow.value === window) text('analytics-state', 'Không truy vấn được Log Analytics.');
+    } finally {
+      analytics.disabled = false;
+    }
+  };
+
+  const logPanel = field('log-panel');
+  let logRevision = 0;
+  logPanel.addEventListener('close', () => {
+    logRevision++;
+    logStream?.close();
+  });
+  field('close-log').onclick = () => logPanel.close();
+
+  function startLog(run, status) {
+    logStream?.close();
+    logRevision++;
+    text('log-title', run.title);
+    text('log-state', status);
+    text('log', '');
+    if (!logPanel.open) logPanel.showModal();
+    return logRevision;
+  }
+
+  async function openBuildLog(run) {
+    const revision = startLog(run, 'Đang tải log build…');
+    const url = `/api/operations/build-log?run=${encodeURIComponent(run.id)}`;
+    async function refresh() {
+      if (revision !== logRevision || !logPanel.open) return;
+      try {
+        const {content, active, status} = await api(url);
+        if (revision !== logRevision || !logPanel.open) return;
+        text('log', content);
+        text('log-state', status);
+        if (active) setTimeout(refresh, 2000);
+      } catch {
+        if (revision === logRevision && logPanel.open) text('log-state', 'Không tải được log build.');
+      }
+    }
+    await refresh();
+  }
+
+  function openLog(run) {
+    startLog(run, 'Đang mở luồng log Azure…');
+    const output = field('log');
+    logStream = new EventSource(`/api/operations/log?job=${encodeURIComponent(run.id)}`);
+    const stream = logStream;
+    stream.addEventListener('line', event => {
+      const follow = output.scrollTop + output.clientHeight >= output.scrollHeight - 20;
+      output.append(JSON.parse(event.data));
+      if (follow) output.scrollTop = output.scrollHeight;
+      text('log-state', 'Đang đọc log');
+    });
+    stream.addEventListener('end', event => {
+      text('log-state', JSON.parse(event.data));
+      stream.close();
+    });
+    stream.onerror = () => {
+      text('log-state', 'Mất kết nối với luồng log.');
+      stream.close();
+    };
+  }
+  function runRows(runs, detailLabel, source) {
+    const rows = element('tbody');
+    for (const run of runs) {
+      const actions = element('div');
+      actions.className = 'actions';
+      if (run.inline_log || source === 'builds') {
+        const button = element('button', 'Xem log');
+        button.type = 'button';
+        button.className = 'button';
+        button.onclick = () => source === 'builds' ? openBuildLog(run) : openLog(run);
+        actions.append(button);
+      }
+      if (typeof run.url === 'string' && /^https:\/\//i.test(run.url)) {
+        const link = element('a', source === 'azure' ? 'Azure Studio' : 'Log trên GitHub');
+        link.href = run.url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        actions.append(link);
+      }
+      const state = run.active ? 'warn' : /^(completed|success)$/i.test(run.status) ? 'good'
+        : /^(failed|failure|timed_out)$/i.test(run.status) ? 'bad' : '';
+      addRow(rows, [run.title, pill(run.status, state), run.detail, when(run.date), actions]);
+    }
+    return table(['Tên', 'Trạng thái', detailLabel, 'Tạo lúc', 'Chi tiết'], rows);
+  }
+
+  function updateRuns(source, runs) {
+    const target = field(`${source}-runs`);
+    target.replaceChildren();
+    if (!runs) return;
+    const active = runs.filter(run => run.active);
+    const history = runs.filter(run => !run.active);
+    const detailLabel = source === 'azure' ? 'Experiment' : source === 'builds' ? 'Kiểm tra' : 'Nhánh';
+    for (const [label, entries, empty] of [
+      ['Đang chạy hoặc chờ', active, 'Hiện không có lượt đang chạy hoặc chờ.'],
+      ['Lịch sử', history, 'Chưa có lịch sử.'],
+    ]) {
+      const section = element('section');
+      section.className = 'message';
+      section.append(element('h3', label));
+      section.append(entries.length ? runRows(entries, detailLabel, source) : element('p', empty));
+      target.append(section);
+    }
+  }
+
+  const refreshSeconds = {azure: 30, builds: 5, github: 30};
+  async function refreshReview() {
+    try {
+      const {summary} = await api('/api/monitoring/review');
+      if (!summary) {
+        text('review-summary', 'Chưa cấu hình lô duyệt.');
+        return;
+      }
+      const statuses = [`${summary.pending} chờ duyệt`, `${summary.reviewed} đã lưu nhãn`];
+      if (summary.missing) statuses.push(`${summary.missing} chưa có tác vụ`);
+      if (summary.conflicts) statuses.push(`${summary.conflicts} có nhãn xung đột`);
+      text('review-summary', ['Lô hiện tại', ...statuses].join(' · '));
+    } catch {
+      text('review-summary', 'Không lấy được trạng thái lô từ Label Studio.');
+    }
+  }
+  const runFingerprints = {};
+  async function refreshRuns(source) {
+    const button = field(`reload-${source}`);
+    if (button.disabled) return;
+    button.disabled = true;
+    try {
+      const {runs} = await api(`/api/operations/${source}`);
+      text(`${source}-state`, runs === null ? 'Chưa cấu hình nguồn.' : `Cập nhật lúc ${when(Date.now())} · tự làm mới mỗi ${refreshSeconds[source]} giây`);
+      const fingerprint = JSON.stringify(runs);
+      if (runFingerprints[source] !== fingerprint) {
+        updateRuns(source, runs);
+        runFingerprints[source] = fingerprint;
+      }
+    } catch {
+      text(`${source}-state`, 'Không lấy được dữ liệu mới từ nguồn.');
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  timeWindow.onchange = () => {
+    if (!analytics.hidden) text('analytics-state', 'Tải lại số liệu cho khoảng thời gian vừa chọn.');
+    connect();
+  };
+  connect();
+  refreshReview();
+  setInterval(refreshReview, 30000);
+  for (const source of Object.keys(refreshSeconds)) {
+    field(`reload-${source}`).onclick = () => refreshRuns(source);
+    refreshRuns(source);
+    setInterval(() => refreshRuns(source), refreshSeconds[source] * 1000);
+  }
+</script>
+</html>

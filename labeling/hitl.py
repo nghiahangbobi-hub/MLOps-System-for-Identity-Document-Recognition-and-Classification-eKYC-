@@ -213,6 +213,33 @@ def corrected_labels(results):
     raise ValueError("Incomplete correction or quality supplied with Outside_Scope")
 
 
+def matches_task(data, expected):
+    image = expected["image"]
+    mounted = image.replace("?d=images/", f"?d=hitl-midv-5gb-{expected['batch_id'][:12]}/images/", 1)
+    return data.get("image") in (image, mounted) and all(
+        data.get(key) == value for key, value in expected.items() if key != "image"
+    )
+
+
+def completed_corrections(annotations):
+    if not isinstance(annotations, list):
+        raise ValueError("Expected a list of annotations")
+    for annotation in annotations:
+        if not isinstance(annotation, dict):
+            raise ValueError("Invalid annotation object")
+        cancelled = annotation.get("was_cancelled", False)
+        skipped = annotation.get("skipped", False)
+        if type(cancelled) is not bool or type(skipped) is not bool:
+            raise ValueError("Invalid annotation flags")
+        if cancelled or skipped:
+            continue
+        results = annotation.get("result", [])
+        if not isinstance(results, list):
+            raise ValueError("Expected a list of annotation results")
+        if results:
+            yield annotation, corrected_labels(results)
+
+
 def read_reviews(raw, batch):
     tasks = load_json(raw)
     if not isinstance(tasks, list):
@@ -224,34 +251,9 @@ def read_reviews(raw, batch):
         event_id = data.get("event_id") if isinstance(data, dict) else None
         if not isinstance(event_id, str) or event_id not in expected:
             raise ValueError("Export task does not match the batch")
-        expected_data = expected[event_id]
-        image = expected_data["image"]
-        # Extracted-sample imports mount each batch below a project media prefix.
-        mounted_image = image.replace(
-            "?d=images/", f"?d=hitl-midv-5gb-{batch['batch_id'][:12]}/images/", 1
-        )
-        if data.get("image") not in (image, mounted_image) or any(
-            data.get(key) != value for key, value in expected_data.items() if key != "image"
-        ):
+        if not matches_task(data, expected[event_id]):
             raise ValueError("Export task does not match the batch")
-        annotations = task.get("annotations", [])
-        if not isinstance(annotations, list):
-            raise ValueError("Expected a list of annotations")
-        for annotation in annotations:
-            if not isinstance(annotation, dict):
-                raise ValueError("Invalid annotation object")
-            cancelled = annotation.get("was_cancelled", False)
-            skipped = annotation.get("skipped", False)
-            if type(cancelled) is not bool or type(skipped) is not bool:
-                raise ValueError("Invalid annotation flags")
-            if cancelled or skipped:
-                continue
-            results = annotation.get("result", [])
-            if not isinstance(results, list):
-                raise ValueError("Expected a list of annotation results")
-            if not results:
-                continue
-            correction = corrected_labels(results)
+        for _, correction in completed_corrections(task.get("annotations", [])):
             if corrections.setdefault(event_id, correction) != correction:
                 raise ValueError(f"Conflicting completed corrections for {event_id}")
     missing = expected.keys() - corrections.keys()
