@@ -1,86 +1,110 @@
 # MLOps eKYC
 
-For the extracted MIDV-2020 sample, follow the [new dataset replay and results](docs/midv-5gb.md).
+Phân loại ảnh giấy tờ mô phỏng MIDV-2020 thành `ID_Card` hoặc `Passport`.
+Chạy từ thư mục gốc trên Linux với Python 3.11.
 
-**English** · [Tiếng Việt](README.vi.md)
-
-Classify MIDV-2020 clip frames as `ID_Card` or `Passport`, assess image quality when reviewed targets are available, and send uncertain or degraded images for review. The project covers the predictive-analysis branch of the course rubric.
-
-## Project structure
-
-| Directory | Responsibility |
+| Thư mục | Trách nhiệm |
 |---|---|
-| `data_pipeline/` | Read-only MIDV extraction, template-based splits, manifests and data checks. |
-| `labeling/` | Label Studio interfaces, review export ingestion, approval and dataset lineage. |
-| `modeling/` | Training, validation-based model selection, metrics and inference. |
-| `azure/` | Blob and Azure ML instructions, job and endpoint definitions, benchmarks and telemetry. |
-| `demo/` | Browser upload, scoring proxy and review queue. |
-| `ops/` | Reproduction and verification tools. |
-| `docs/` | Workflow documentation. Keep local evidence outside the source release. |
+| `data_pipeline/` | Kiểm tra ảnh, lấy mẫu và tạo manifest theo tập chia. |
+| `labeling/` | Cấu hình Label Studio, nhập nhãn và xuất bản manifest đã duyệt. |
+| `modeling/` | Huấn luyện, đánh giá, đóng gói và phục vụ dự đoán. |
+| `demo/` | Giao diện thử dự đoán và hàng đợi duyệt. |
+| `azure/` | Cấu hình chạy trên Azure ML và các phép đo vận hành. |
+| `checks/` | Kiểm thử xuyên suốt giữa các thành phần. |
 
-For a new check, use a fresh Python environment and keep the dataset,
-model and run outputs in a dedicated external working directory. Use
-[the model evaluation runbook](modeling/QUALITY.md) for a complete experiment.
-
-## Local pipeline
-
-Run from the project root. Use an isolated Python environment with compatible CPU PyTorch and torchvision wheels. Python 3.11 is a suitable starting point.
+Các kiểm thử riêng nằm cạnh mã của từng thành phần. Đặt dữ liệu đầu vào
+trong `Data/` và kết quả cục bộ trong `runs/`.
 
 ```bash
-python -m pip install -r data_pipeline/requirements.txt
-run_dir=$(mktemp -d)
-python -m data_pipeline.midv2020 --output "$run_dir/dataset" \
-  --max-clips-per-template 2 --frames-per-clip 3 --min-frame-gap 10
-python -m labeling.label_studio make-tasks \
-  --manifest "$run_dir/dataset/manifest.csv" \
-  --dataset-root "$run_dir/dataset" --media-root "$run_dir" \
-  --output "$run_dir/tasks.json"
+python3.11 -m venv .venv/release
+source .venv/release/bin/activate
+python -m pip install -r requirements.txt
 ```
 
-Pass `--source /path/to/clips.tar` to override the archive path. Omit the clip cap when preparing the full dataset. Keep each group in a single split and use the same manifest and seed across experiment variants.
+## 1. Chuẩn bị dữ liệu
 
-For quality training, run Label Studio Community locally, enable local file serving, and set its document root to the same media root used to generate tasks. Use [quality.xml](labeling/quality.xml) as the labeling interface, register the local image directory as a storage source, and import `tasks.json`. See the [labeling runbook](labeling/README.md) for the storage and export steps. Review each image as Clear, Blur, Glare, Occluded, or Outside_Scope. Export raw JSON and apply it to the manifest with the command below. Retain the raw export and reviewed manifest as evidence.
+Đặt `source_dir` theo vị trí đã giải nén. Chọn `run` mới cho mỗi lần chạy.
 
 ```bash
-python -m labeling.label_studio apply-reviews \
-  --manifest "$run_dir/dataset/manifest.csv" \
-  --review-export "$run_dir/reviews.json" \
-  --output "$run_dir/dataset/reviewed.csv"
+source_dir=Data/MIDV2020_sample_5GB
+run=runs/midv-5gb
+python -m data_pipeline.prepared_midv --source "$source_dir" --output "$run/inputs"
 ```
 
-Install the training dependencies into the project environment. The command below exercises the document-classification path. Use `reviewed.csv` for the quality path.
+Pipeline đọc tại chỗ năm thư mục `clips`, `photo`, `scan_rotated`,
+`scan_upright`, `templates`. Mỗi giấy tờ có ba frame video cách nhau ít nhất
+10 frame và một ảnh từ mỗi nguồn tĩnh. Split theo template cố định, loại
+`rus_internalpassport` và kiểm tra JPEG trùng byte, ảnh lỗi và các nguồn
+thiếu giấy tờ. File `provenance.json` ghi kích thước và SHA-256 của các
+manifest. Nhãn chất lượng để trống trước khi duyệt.
+
+Với đầu vào `clips.tar`, tạo một bộ nhỏ để chạy thử.
 
 ```bash
-python -m pip install -r modeling/requirements.txt
-export MLFLOW_ALLOW_FILE_STORE=true
-python -m modeling.train \
-  --dataset-root "$run_dir/dataset" \
-  --manifest "$run_dir/dataset/manifest.csv" \
-  --output-dir "$run_dir/model-baseline" \
-  --device cpu --epochs 1 --batch-size 4 \
-  --tracking-uri "file://$run_dir/mlruns" --experiment ekyc-smoke
+python -m data_pipeline.midv2020 --source /path/to/clips.tar \
+  --output "$run/clips" --max-clips-per-template 2
+python -m modeling.train --dataset-root "$run/clips" \
+  --manifest "$run/clips/manifest.csv" --output-dir "$run/clips-model" --device cpu
 ```
 
-The model bundle holds PyTorch weights and preprocessing and class metadata. Compare variants on validation metrics and evaluate the chosen configuration on the held-out test split. Evaluate quality on reviewed samples and report the quality sample count alongside metrics.
+Bundle của bộ chạy thử nằm ở `"$run/clips-model"` và dùng được ở bước 3.
 
-The scoring request is a JSON object with an `image_base64` field. The response includes `label`, `status`, `confidence`, and `needs_review`. Degraded image quality, missing quality evidence, or low document confidence can require manual review. A document-only bundle returns a null quality status.
+## 2. Huấn luyện và đánh giá
 
-If Label Studio is running on port 8080, start the demo with `python -m demo.server --port 8081` after setting `EKYC_SCORING_URL` according to the Azure runbook.
-
-## Human-in-the-loop review
-
-The [HITL runbook](docs/hitl.md) connects demo predictions and explicit reports for mock images to Label Studio, approval, dataset lineage, and operator-submitted training.
-
-## Azure and tests
-
-The [Azure Blob Storage setup guide](azure/blob-storage.en.md) covers workspace creation, image upload, and data asset registration.
-
-The [Azure runbook](azure/README.md) covers deployment, demo configuration, and benchmark commands. Keep datasets, model artifacts, credentials, and evaluation outputs in private storage.
-
-After installing dependencies in a virtual environment, run the component regression tests:
+Với bộ đã giải nén từ bước 1, so sánh hai cấu hình trên validation, khóa
+lựa chọn rồi đánh giá test. Lần đầu cần tải trọng số ImageNet.
 
 ```bash
-python -m unittest data_pipeline.test_release labeling.test_release labeling.test_hitl
-python -m unittest modeling.test_release modeling.test_quality_compare
-python -m unittest azure.test_release demo.test_release demo.test_review_queue
+holdout_hash=$(sha256sum "$run/inputs/held-out.csv" | cut -d ' ' -f 1)
+python -m modeling.quality_compare compare --dataset-root "$source_dir" \
+  --development "$run/inputs/development.csv" --held-out-sha256 "$holdout_hash" \
+  --output "$run/comparison-cpu" --device cpu --workers 0 --epochs 8
+python -m modeling.quality_compare seal --comparison "$run/comparison-cpu" \
+  --output "$run/selected"
+python -m modeling.quality_compare evaluate --dataset-root "$source_dir" \
+  --base-manifest "$run/inputs/manifest.csv" --held-out "$run/inputs/held-out.csv" \
+  --output "$run/selected" --device cpu --workers 0
 ```
+
+Bundle nằm ở `"$run/selected/bundle"`. Kết quả đánh giá lưu accuracy,
+macro-F1, recall, confusion matrix và số mẫu. Huấn luyện chất lượng ảnh
+cần [nhãn Label Studio](labeling/README.md).
+
+## 3. Chạy API và demo
+
+```bash
+azmlinfsrv --entry_script modeling/score.py \
+  --model_dir "$(realpath "$run/selected/bundle")" --port 5001
+```
+
+Trong terminal thứ hai, ở thư mục gốc của repo, chạy các lệnh sau.
+
+```bash
+source .venv/release/bin/activate
+export EKYC_SCORING_URL=http://127.0.0.1:5001/score
+python -m demo.server --port 8080
+```
+
+Mở [demo](http://127.0.0.1:8080) và gửi JPEG hoặc PNG mô phỏng tối đa 8 MiB.
+Xem [hàng đợi duyệt và huấn luyện lại](labeling/README.md) hoặc
+[triển khai Azure ML](azure/README.md).
+
+## Kiểm thử cục bộ
+
+```bash
+python -m unittest data_pipeline.test_release data_pipeline.test_sample_midv \
+  data_pipeline.test_prepared_midv labeling.test_release labeling.test_hitl \
+  modeling.test_release modeling.test_quality_compare azure.test_release \
+  demo.test_release demo.test_review_queue
+```
+
+Đặt `EKYC_RELEASE_DATASET` trỏ đến fixture do `data_pipeline.midv2020` tạo
+và đặt `EKYC_CHECK_AZURE_SCHEMAS=1` để chạy thêm kiểm tra tích hợp.
+
+```bash
+python -m checks.release_smoke --source /path/to/clips.tar --output "$run/check-release"
+python -m checks.hitl_smoke --dataset-root "$run/clips" --output "$run/check-review" --runtime podman
+```
+
+Kiểm thử hàng đợi dùng Label Studio chạy trong Podman hoặc Docker
+(`--runtime docker`).

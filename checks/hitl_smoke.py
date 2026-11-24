@@ -100,7 +100,7 @@ def smoke(dataset, output, runtime):
 
     from PIL import Image
 
-    from ops.release_smoke import ROOT, command, http, local_port, read_rows, service
+    from checks.release_smoke import ROOT, command, http, local_port, read_rows, service
 
     output.mkdir()
     dataset = dataset.resolve(strict=True)

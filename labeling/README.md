@@ -1,43 +1,43 @@
-# MIDV-2020 quality review
+# Label Studio
 
-**English** · [Tiếng Việt](README.vi.md)
+## Khởi động Label Studio
 
-Run from the project root. Keep the dataset, task files and annotation exports in
-a local work directory outside the repository.
-Install Pillow in the project environment with
-`python -m pip install -r data_pipeline/requirements.txt`.
+Đặt `media_root` thành đường dẫn tuyệt đối của dataset khi gán nhãn ban đầu,
+hoặc thư mục `batch` khi duyệt dự đoán. Chạy container ở terminal riêng.
+
+```bash
+runtime=docker # Hoặc podman
+media_root="$(realpath /path/to/media-root)"
+"$runtime" volume create ekyc-label-studio
+"$runtime" run --rm -p 127.0.0.1:8082:8080 \
+  -v ekyc-label-studio:/label-studio/data \
+  -v "$media_root:/label-studio/media:ro" \
+  -e LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true \
+  -e LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT=/label-studio/media \
+  docker.io/heartexlabs/label-studio@sha256:844f82c5b08de3f77a57c66f480e0036d3c76c6eff53699e8d47686613faa922
+```
+
+Mở [Label Studio](http://127.0.0.1:8082). Nếu SELinux chặn mount ảnh, dùng
+bản sao lô riêng và thêm `,Z` sau `:ro` trong tùy chọn mount.
+
+## Gán nhãn chất lượng ban đầu
+
+Chạy từ thư mục gốc. Lưu dataset, tác vụ và bản xuất trong thư mục riêng ngoài repo. Cài Pillow bằng `python -m pip install -r data_pipeline/requirements.txt`.
 
 ```bash
 run=$(mktemp -d /tmp/ekyc-data.XXXXXX)
-python -m data_pipeline.midv2020 --output "$run/dataset" \
+python -m data_pipeline.midv2020 --source /path/to/clips.tar --output "$run/dataset" \
   --max-clips-per-template 2 --frames-per-clip 3 --min-frame-gap 10
 python -m labeling.label_studio make-tasks \
   --manifest "$run/dataset/manifest.csv" --dataset-root "$run/dataset" \
   --media-root "$run/dataset" --output "$run/tasks.json"
 ```
 
-Use `--source /path/to/clips.tar` to override the default archive path. Omit the
-clip limit to process the full eligible archive. `template_id` identifies the
-document layout, such as `est_id`. `document_id` identifies a numbered mock
-document and its clip. Each layout belongs to one split, and each split contains
-both classes. Frame gaps are measured in source frame numbers. The build leaves
-quality blank until review.
+Dùng `--source /path/to/clips.tar` để đổi vị trí tệp. Bỏ giới hạn clip để xử lý toàn bộ phần hợp lệ. `template_id` là mẫu giấy tờ, ví dụ `est_id`. `document_id` là giấy tờ mô phỏng có số thứ tự và clip tương ứng. Mỗi mẫu chỉ thuộc một tập, mỗi tập có đủ hai lớp. Khoảng cách giữa ảnh được tính bằng số thứ tự frame gốc. Nhãn chất lượng để trống trước khi duyệt.
 
-Set `LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true` and
-`LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT` to the media root before starting
-Label Studio. With a container, mount the dataset read-only and set the
-environment variable to the mounted path inside the container. Create a project,
-and paste `labeling/quality.xml` into its labeling interface. In the project
-storage settings, add a Local Files source pointing to the dataset's
-`images` directory. Set its import method to Tasks and choose Save without
-syncing. Import `tasks.json` from the project's Data Manager. The storage
-connection lets Label Studio serve the images referenced in the JSON. See
-[Label Studio local storage](https://labelstud.io/guide/storage_local).
+Trước khi chạy Label Studio, bật `LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true` và đặt `LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT` thành thư mục ảnh. Nếu chạy container, gắn dataset chỉ đọc và dùng đường dẫn bên trong container. Tạo dự án với giao diện [quality.xml](quality.xml). Thêm thư mục `/label-studio/media/images` vào Local Files, chọn chế độ Tasks, lưu và bỏ qua đồng bộ. Nhập `tasks.json` trong Data Manager. [Label Studio Local Files](https://labelstud.io/guide/storage_local)
 
-Choose the dominant readability issue for each image. Select Clear when the
-document is readable without a dominant issue. Select Outside_Scope for images
-outside the supported document classes or with no target document. Export the
-project in raw JSON format and save the file as `$run/reviews.json`.
+Chọn lỗi ảnh ảnh hưởng khả năng đọc nhiều nhất. Chọn Clear khi đọc được giấy tờ và không có lỗi chính. Chọn Outside_Scope nếu ảnh không có giấy tờ cần tìm hoặc ngoài hai lớp hỗ trợ. Xuất JSON thô vào `$run/reviews.json`.
 
 ```bash
 python -m labeling.label_studio apply-reviews \
@@ -45,97 +45,82 @@ python -m labeling.label_studio apply-reviews \
   --output "$run/dataset/reviewed.csv"
 ```
 
-Reapply updated project exports to the original manifest. Skips leave quality
-blank, matching completed annotations supply a quality label, and Outside_Scope
-removes the row from the reviewed manifest. If reviewers disagree, resolve the
-conflict in Label Studio and export again. Use the same dataset root with either
-manifest.
+Mỗi bản xuất được áp dụng như một snapshot đầy đủ trên manifest gốc. Dòng bị bỏ qua giữ nhãn trống, nhãn đã thống nhất được lưu, dòng Outside_Scope bị loại. Nếu nhãn mâu thuẫn, xử lý trong Label Studio rồi xuất lại. Hai manifest dùng chung dataset root. Ghi ra tệp riêng. Chạy lại cùng bản xuất cho kết quả giống nhau. Nếu nhiều lượt ghi cùng đích, lần xuất bản thành công cuối quyết định toàn bộ nội dung.
 
-Write to a separate output path. Apply exports as full snapshots of the original
-manifest. Repeating the same export produces identical results. When separate
-exports are applied concurrently to the same output, the last successful
-publication determines the complete output.
+## Đưa dự đoán vào hàng đợi
 
-## Disposable Community Edition smoke test
-
-From the repository root, run the opt-in smoke command with the data
-requirements installed and Docker or rootless Podman available.
+Khởi động [API suy luận](../README.md#3-chạy-api-và-demo) trước.
+Ví dụ sau dùng đầu ra từ bộ MIDV đã giải nén. Đổi đường dẫn theo lần chạy.
 
 ```bash
-set -o pipefail
-python -u -m labeling.smoke 2>&1 | tee /tmp/ekyc-label-studio-smoke.log
+dataset="$PWD/Data/MIDV2020_sample_5GB"
+base_manifest="$PWD/runs/midv-5gb/inputs/manifest.csv"
+mkdir -p runs
+work=$(mktemp -d "$PWD/runs/review.XXXXXX")
+python - "$dataset" "$base_manifest" "$work/allowlist.csv" <<'PYCODE'
+import csv
+import sys
+from pathlib import Path
+
+dataset, manifest, allowlist = map(Path, sys.argv[1:])
+with manifest.open(newline="") as source, allowlist.open("w", newline="") as target:
+    writer = csv.DictWriter(target, fieldnames=["image_id", "image_path"])
+    writer.writeheader()
+    for row in csv.DictReader(source):
+        if row["split"] != "train":
+            continue
+        size = (dataset / row["image_path"]).stat().st_size
+        if 0 < size <= 8 * 1024**2:
+            writer.writerow({key: row[key] for key in writer.fieldnames})
+PYCODE
 ```
-
-Use `--source /path/to/clips.tar` for a different copy of the archive, or
-`--runtime podman` to select the runtime explicitly. The command builds the
-54-frame slice in a temporary directory, opens the pinned Community image on
-a dynamic loopback port, imports every task, and verifies every served JPEG
-against its source bytes. It posts one fixture annotation, downloads raw JSON,
-and runs the review-ingestion CLI. It then removes the disposable container,
-its project storage, and all fixture files. The log records HTTP statuses and
-counts without credentials or review content. Fixture output is technical
-verification only and provides no human label approval.
-
-## Review queued predictions and publish a train manifest
-
-Use a separate Label Studio project for queued predictions. Set `queue_root`
-to the demo's review queue and `dataset_root` to the original mock MIDV
-dataset. Set `work` to a private workspace outside the repository and create
-it before the batch command. Here the base manifest is the dataset's original
-manifest. For a subsequent correction batch, select the desired published
-manifest as the base while using the same dataset root.
 
 ```bash
-base_manifest="$dataset_root/manifest.csv"
-python -m labeling.hitl batch \
-  --queue-root "$queue_root" --base-manifest "$base_manifest" \
-  --dataset-root "$dataset_root" --output "$work/batch"
+export EKYC_SCORING_URL=http://127.0.0.1:5001/score
+python -m demo.server --port 8081 \
+  --review-queue "$work/queue" \
+  --review-manifest "$work/allowlist.csv" \
+  --review-dataset-root "$dataset"
 ```
 
-Only finalized digest-named event directories are read. Queued image bytes
-must match the event digest and the source image referenced by the base
-manifest. A bad finalized event fails the batch. The snapshot records valid
-validation and test events as held out and generates tasks only for train
-events. An empty train batch fails with its held-out count. Keep the batch
-directory and its evidence as produced.
+Mở [demo cục bộ](http://127.0.0.1:8081), chọn ảnh mô phỏng trong manifest và gửi dự đoán. Khi API trả `needs_review=true`, demo lưu ảnh và dự đoán vào hàng đợi. Nút **Report incorrect prediction** thêm lý do báo sai. Các lần gửi cùng ảnh dùng chung sự kiện theo SHA-256. Có thể thử lại khi lỗi ghi hàng đợi. Sau khi khởi động lại demo, gửi dự đoán mới để lấy mã báo sai hiện hành. Sự kiện đã lưu vẫn còn.
 
-Start Label Studio with local file serving enabled and set its document root
-to `$work/batch` or to the equivalent read-only container mount. Add the
-batch's `images` directory as a Local Files source, select Tasks mode, and
-save without syncing. Create the project using `labeling/hitl.xml`, then
-import `$work/batch/tasks.json`. Review the image and select the correct
-document type and quality, or select Outside_Scope by itself to exclude
-the train row. Export raw **JSON** to `$work/export.json`. A complete export
-must contain an agreed completed decision for every task. Canceled, skipped,
-and predicted results do not count as decisions.
+## Chuyển lô ảnh sang Label Studio
 
-Have the person approving that exact export run the separate approval command
-with their local reviewer identifier. This records the supplied identity and
-the SHA256 of the batch metadata, base manifest, and exact export bytes. Local
-approval records rely on control of the workspace and the explicit approval
-action.
+```bash
+python -m labeling.hitl batch --queue-root "$work/queue" \
+  --base-manifest "$base_manifest" --dataset-root "$dataset" \
+  --output "$work/batch"
+```
+
+Tạo dự án Label Studio Community với [hitl.xml](hitl.xml). Khởi động Label Studio với `media_root="$work/batch"`. Thêm `/label-studio/media/images` làm nguồn Local Files ở chế độ Tasks và lưu nguồn. Nhập `batch/tasks.json`. Người duyệt xác nhận hoặc sửa loại giấy tờ và chất lượng. Chọn `Outside_Scope` khi cần loại ảnh. Hoàn thành mọi tác vụ trong lô rồi xuất JSON thô.
+
+Chỉ sự kiện train đã ghi hoàn tất được đưa vào lô. Sự kiện validation hoặc test vẫn có thể xuất hiện trong lịch sử hàng đợi. Các dòng validation và test giữ nguyên khi tạo phiên bản mới.
+
+## Phê duyệt và tạo phiên bản
+
+Đặt `reviewer_id` thành định danh người phê duyệt. Giữ nguyên nội dung tệp JSON đã xuất. Gán nhãn và phê duyệt là hai thao tác riêng.
 
 ```bash
 python -m labeling.hitl approve --batch "$work/batch" \
-  --review-export "$work/export.json" --reviewer "$reviewer_id" \
+  --review-export "$work/reviews.json" --reviewer "$reviewer_id" \
   --output "$work/approval.json"
 python -m labeling.hitl publish --batch "$work/batch" \
-  --review-export "$work/export.json" --approval "$work/approval.json" \
-  --base-manifest "$base_manifest" --dataset-root "$dataset_root" \
+  --review-export "$work/reviews.json" --approval "$work/approval.json" \
+  --base-manifest "$base_manifest" --dataset-root "$dataset" \
   --versions-root "$work/versions"
 ```
 
-Publication prints the new manifest path. Its sibling `lineage.json` records
-the approval, manifest digest, affected event IDs, prediction and queue
-reasons, before/after labels, and exclusions. Holdout row values stay the
-same. The output includes quality provenance so a reviewed train correction
-can differ from the source layout label while keeping its layout ID and split.
+Thư mục mang mã phiên bản vừa in chứa `manifest.csv` và `lineage.json`. Hồ sơ phê duyệt ghi người duyệt và SHA-256 của bản xuất. Lineage ghi nguồn, kết quả, nhãn trước và sau cùng các trường hợp bị loại. Chạy lại với cùng đầu vào đã duyệt sẽ dùng lại phiên bản đó.
 
-The version ID is the SHA256 of the approval file. Identical retries return
-the same artifacts. An existing version with different bytes is an error.
-Changing the export or base invalidates its previous approval. Save updated
-exports and approvals under new paths. To train, manually submit a model
-training job with the published manifest path and the original dataset root.
-Retain the base, batch, export, approval and lineage with the training record.
+## Gửi job huấn luyện thủ công
 
-Run the focused regressions with `python -m unittest -v labeling.test_hitl`.
+Kiểm tra manifest và lineage, rồi dùng mã phiên bản `version_id` để chạy huấn luyện. Các đường dẫn ảnh vẫn tính từ thư mục dataset ban đầu.
+
+```bash
+python -m modeling.train --dataset-root "$dataset" \
+  --manifest "$work/versions/$version_id/manifest.csv" \
+  --output-dir "$work/manual-model" --device cpu --experiment ekyc-reviewed
+```
+
+Lưu ID của lần huấn luyện, mã phiên bản, hash manifest và số mẫu chất lượng ảnh. Đánh giá mô hình chất lượng cần nhãn người duyệt ở tập đánh giá. Nghiệm thu cần người thật duyệt lô ảnh và người vận hành chạy kiểm tra Azure.

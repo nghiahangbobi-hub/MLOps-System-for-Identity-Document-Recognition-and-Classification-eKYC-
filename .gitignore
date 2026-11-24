@@ -12,11 +12,16 @@ htmlcov/
 .env.*
 !.env.example
 .azure/
-.agent-state/
+/.agent-state/
+/.codex/
+/AGENTS.md
+/ops/
 
 # Datasets and experiment output
 *.tar
 *.tar.*
+*.zip
+*.7z
 *.pt
 *.pth
 *.ckpt
@@ -27,11 +32,15 @@ runs/
 artifacts/
 
 # Private evidence and course deliverables
-docs/*-evidence/
-docs/local-results.json
-docs/course-evidence.md
-docs/model-quality.md
-docs/release-verification.md
+/docs/
+/README.vi.md
+/azure/README.vi.md
+/azure/blob-storage*.md
+/azure/clean-room.md
+/azure/clean-room-inventory.sh
+/data_pipeline/SAMPLING.md
+/labeling/README.vi.md
+/modeling/QUALITY*.md
 *.docx
 *.pptx
 *.pdf
