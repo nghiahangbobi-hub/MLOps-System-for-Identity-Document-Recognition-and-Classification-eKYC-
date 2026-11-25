@@ -7,8 +7,9 @@ datastore `workspaceblobstore` và ảnh giấy tờ mô phỏng.
 
 ## 1. Đăng ký dữ liệu
 
-Đổi đường dẫn `MIDV_ARCHIVE` theo máy. Nếu đã có thư mục ảnh trong Blob,
-dùng prefix hiện có và đặt đường dẫn manifest phù hợp khi đăng ký.
+Dùng manifest đã duyệt theo [quy trình Bài tập 13](../WORKFLOW.md).
+Chọn thư mục ảnh gốc và phiên bản Blob mới. Với các vòng HITL dùng cùng bộ ảnh,
+có thể dùng lại asset ảnh và đăng ký manifest mới.
 
 ```bash
 az login --use-device-code
@@ -21,14 +22,15 @@ az extension add --name ml
 
 export BLOB_ACCOUNT='<storage account backing workspaceblobstore>'
 export BLOB_CONTAINER='<container backing workspaceblobstore>'
-export MIDV_ARCHIVE="/path/to/clips.tar"
+export DATASET_ROOT="Data/MIDV2020_sample_5GB"
+export REVIEWED_MANIFEST="runs/assignment13/labeling/reviewed-v1.csv"
 export DATA_VERSION="$(date -u +%Y%m%d%H%M%S)"
 export BLOB_PREFIX="ekyc/midv/$DATA_VERSION"
 local_run=$(mktemp -d)
 az storage blob list --auth-mode login --account-name "$BLOB_ACCOUNT" \
   --container-name "$BLOB_CONTAINER" --num-results 1 -o none
-python -m data_pipeline.midv2020 --source "$MIDV_ARCHIVE" \
-  --output "$local_run/dataset" --max-clips-per-template 2 --frames-per-clip 3 --min-frame-gap 10
+python -m data_pipeline.stage --dataset-root "$DATASET_ROOT" \
+  --manifest "$REVIEWED_MANIFEST" --output "$local_run/dataset"
 
 az storage blob upload-batch --auth-mode login --account-name "$BLOB_ACCOUNT" \
   --destination "$BLOB_CONTAINER" --destination-path "$BLOB_PREFIX" \
@@ -81,15 +83,26 @@ az ml job show "${workspace[@]}" --name "$job" --query status -o tsv
 
 Sau một vòng duyệt, đăng ký manifest mới thành data asset `uri_file` với
 phiên bản mới, cập nhật `AZ_MANIFEST_ASSET` rồi gửi job thủ công. Dùng lại
-asset thư mục ảnh gốc. Với job kiểm thử nhỏ, thêm `inputs.epochs=1` và
-`inputs.batch_size=4` vào `--set`.
+asset thư mục ảnh gốc. Job dùng MobileNetV3 pretrained, chọn trên validation
+và đánh giá test sau khi khóa checkpoint. Kết quả gồm output `evidence` và
+`model_bundle` cho ứng viên qua kiểm tra offline.
 
 ## 3. Triển khai và kiểm tra
 
-Sau khi job `Completed`, đặt `AZ_MODEL_VERSION` thành phiên bản chưa dùng,
+Sau khi job `Completed`, tải output `evidence`, tìm thư mục chứa
+`workflow.json` và kiểm tra hash cùng kết luận của ứng viên. [Lệnh tải output của Azure CLI](https://learn.microsoft.com/cli/azure/ml/job#az-ml-job-download)
+
+```bash
+az ml job download "${workspace[@]}" --name "$job" --output-name evidence \
+  --download-path "$work_dir/evaluation"
+evidence=$(python -c 'from pathlib import Path; import sys; print(next(Path(sys.argv[1]).rglob("workflow.json")).parent)' "$work_dir/evaluation")
+python -m modeling.workflow check-release --run "$evidence"
+```
+
+Khi kiểm tra qua, đặt `AZ_MODEL_VERSION` thành phiên bản chưa dùng,
 `AZ_ENDPOINT` thành tên endpoint và `AZ_INSTANCE_TYPE` thành SKU có quota.
-Để dùng bundle đã huấn luyện cục bộ, thay đường dẫn `--path` trong lệnh
-đăng ký model bằng đường dẫn thư mục bundle.
+Tạo deployment staging ở 0% lưu lượng. Nếu muốn dùng ứng viên huấn luyện cục bộ,
+chạy cùng lệnh `check-release` và đăng ký thư mục bundle đã kiểm tra.
 
 ```bash
 az ml environment create "${workspace[@]}" -f "$spec/environment-inference.yml"
@@ -123,10 +136,11 @@ Mở http://127.0.0.1:8081, gửi ảnh và kiểm tra dự đoán cùng trạng
 
 ```bash
 python -m azure.benchmark --runs 100 --client-location "$CLIENT_LOCATION" \
-  --target-location japaneast scoring "$MOCK_IMAGE" --warmup 3
+  --target-location japaneast scoring "$MOCK_IMAGE" --warmup 3 > staging-benchmark.json
 ```
 
-Sau khi kiểm tra deployment, chạy các lệnh sau để chuyển lưu lượng.
+Xem dự đoán mẫu và `staging-benchmark.json` trước khi chuyển lưu lượng.
+Benchmark trả mã lỗi nếu bất kỳ lượt đo nào thất bại hoặc vượt 3 giây.
 Mở lại demo với cấu hình mới nếu tiến trình trước đó còn chạy.
 
 ```bash

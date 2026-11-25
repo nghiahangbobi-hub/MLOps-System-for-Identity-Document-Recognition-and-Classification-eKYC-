@@ -15,10 +15,11 @@ from time import perf_counter, sleep
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
 
+from demo import training
 from demo.client import MAX_IMAGE_BYTES, ScoringError, encode_image, score
 from demo.monitoring import Monitoring, WINDOWS, azure_snapshot
 from demo.operations import (
-    LOG_SLOTS, azure_jobs, azure_log_command, github_runs, local_build_log, local_builds, stream_logs,
+    LOG_SLOTS, azure_jobs, azure_log_command, github_runs, local_build_log, local_builds, local_run_log, local_runs, stream_logs,
 )
 from demo.review_queue import ReviewQueue
 
@@ -69,8 +70,12 @@ class Handler(BaseHTTPRequestHandler):
         elif route.path in {"/api/operations/azure", "/api/operations/github", "/api/operations/builds"}:
             source = route.path.rsplit("/", 1)[-1]
             self.operation_list({"azure": azure_jobs, "github": github_runs, "builds": local_builds}[source])
+        elif route.path == "/api/operations/training":
+            self.operation_list(self.training_runs)
+        elif route.path == "/api/operations/training-log":
+            self.run_log(route, self.training_log)
         elif route.path == "/api/operations/build-log":
-            self.build_log(route)
+            self.run_log(route, local_build_log)
         elif route.path == "/api/operations/log":
             self.operation_log(route)
         elif route.path == "/api/monitoring/review":
@@ -184,7 +189,8 @@ class Handler(BaseHTTPRequestHandler):
             window, self.server.review_queue, self.server.label_studio_url
         )
         review = getattr(self.server, "review", None)
-        metrics["label_studio_project_url"] = f"{review.base}/projects/{review.project}/data" if review else None
+        studio_url = self.server.label_studio_url.rstrip("/")
+        metrics["label_studio_project_url"] = f"{studio_url}/projects/{review.project}/data" if review else None
         return metrics
 
     def review_summary(self):
@@ -201,23 +207,40 @@ class Handler(BaseHTTPRequestHandler):
     def operation_list(self, load):
         try:
             runs = load()
-        except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
-            LOGGER.warning("Could not load %s", load.__name__)
-            self.reply(503, b'{"error":"Source unavailable."}')
+        except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError,
+                training.TrainingUnavailable) as exc:
+            message = "Không lấy được dữ liệu mới từ nguồn."
+            if load is azure_jobs and isinstance(exc, FileNotFoundError):
+                message = "Azure CLI không khởi động được. Kiểm tra đường dẫn EKYC_AZ_CLI và môi trường cài đặt."
+            elif load is github_runs and isinstance(exc, HTTPError):
+                if exc.headers.get("X-RateLimit-Remaining") == "0":
+                    message = "GitHub API đã hết lượt truy vấn. Chờ làm mới hạn mức hoặc cấu hình GH_TOKEN."
+                elif exc.code in (401, 403, 404):
+                    message = "Kiểm tra tên repository và quyền đọc GitHub Actions của GH_TOKEN."
+            LOGGER.warning("Could not load %s (%s)", load.__name__, type(exc).__name__)
+            self.reply(503, json.dumps({"error": message}).encode())
             return
         self.reply(200, json.dumps({"runs": runs}).encode())
 
-    def build_log(self, route):
+    def training_runs(self):
+        training.reconcile()
+        return local_runs(training.training_root())
+
+    def training_log(self, run_id):
+        training.reconcile()
+        return local_run_log(training.training_root(), run_id, "training.log")
+
+    def run_log(self, route, load):
         names = parse_qs(route.query).get("run", [])
         try:
             if len(names) != 1:
-                raise ValueError("Expected one build ID")
-            result = local_build_log(names[0])
+                raise ValueError("Expected one run ID")
+            result = load(names[0])
         except ValueError:
-            self.reply(400, b'{"error":"Invalid build ID."}')
+            self.reply(400, b'{"error":"Invalid run ID."}')
             return
-        except OSError:
-            self.reply(404, b'{"error":"Build log unavailable."}')
+        except (OSError, training.TrainingUnavailable):
+            self.reply(404, b'{"error":"Log unavailable."}')
             return
         self.reply(200, json.dumps(result).encode())
 
@@ -306,7 +329,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         queue = getattr(self.server, "review_queue", None)
-        if self.path == "/api/review/tasks":
+        if self.path == "/api/operations/training":
+            self.start_training()
+        elif self.path == "/api/review/tasks":
             self.review_request(self.path, write=True)
         elif self.path == "/report" and queue is not None:
             self.report(queue)
@@ -316,6 +341,31 @@ class Handler(BaseHTTPRequestHandler):
             self.predict(queue)
         else:
             self.reply(404, b'{"error":"Unknown route."}')
+
+    def start_training(self):
+        host = self.headers.get("Host")
+        port = self.server.server_port
+        origins = {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
+        if (host is None or f"http://{host}" not in origins
+                or self.headers.get("Origin") not in (None, f"http://{host}")
+                or self.headers.get("X-EKYC-Training") != "1"):
+            self.reply(403, b'{"error":"Local training request required."}')
+            return
+        if self.headers.get("Content-Length", "0") != "0" or self.headers.get("Transfer-Encoding"):
+            self.reply(400, b'{"error":"Expected an empty request."}')
+            return
+        try:
+            run = training.launch()
+        except training.TrainingBusy as exc:
+            code, result = 409, {"error": str(exc)}
+        except training.TrainingUnavailable as exc:
+            code, result = 503, {"error": str(exc)}
+        except (OSError, ValueError) as exc:
+            LOGGER.error("Could not start local training: %s", exc)
+            code, result = 503, {"error": "Không thể khởi động huấn luyện. Kiểm tra thư mục runs/."}
+        else:
+            code, result = 202, {"run": run}
+        self.reply(code, json.dumps(result).encode())
 
     def predict(self, queue):
         if self.headers.get_content_type() not in {"image/jpeg", "image/png"}:
@@ -327,7 +377,15 @@ class Handler(BaseHTTPRequestHandler):
             return
         headers = {}
         try:
-            result = score(encode_image(image))
+            body = encode_image(image)
+            local_score = getattr(self.server, "local_score", None)
+            if local_score is None:
+                result = score(body)
+            else:
+                try:
+                    result = local_score(body)
+                except ValueError as exc:
+                    raise ScoringError(str(exc), status=400) from exc
             self.prediction_confidence = result.get("confidence")
             status = 200
             if queue is not None:
@@ -377,24 +435,28 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8081)
-    parser.add_argument("--review-queue", type=Path)
-    parser.add_argument("--review-manifest", type=Path)
-    parser.add_argument("--review-dataset-root", type=Path)
+    parser.add_argument("--model-bundle", type=Path, default=os.getenv("EKYC_MODEL_BUNDLE") or None)
+    parser.add_argument("--review-queue", type=Path, default=os.getenv("EKYC_REVIEW_QUEUE") or None)
+    parser.add_argument("--review-manifest", type=Path, default=os.getenv("EKYC_REVIEW_MANIFEST") or None)
+    parser.add_argument("--review-dataset-root", type=Path, default=os.getenv("EKYC_REVIEW_DATASET_ROOT") or None)
     parser.add_argument("--monitoring-db", type=Path, default=Path("runs/monitoring.sqlite3"))
-    parser.add_argument("--monitoring-threshold", type=float, default=0.7)
+    parser.add_argument("--monitoring-threshold", type=float)
     parser.add_argument("--label-studio-url", default=os.getenv(
         "EKYC_LABEL_STUDIO_URL", "http://127.0.0.1:8080"
     ))
-    parser.add_argument("--review-batch", type=Path)
-    parser.add_argument("--label-studio-project", type=int)
+    parser.add_argument("--label-studio-public-url", default=os.getenv("EKYC_LABEL_STUDIO_PUBLIC_URL") or None)
+    parser.add_argument("--review-batch", type=Path, default=os.getenv("EKYC_REVIEW_BATCH") or None)
+    parser.add_argument("--label-studio-project", type=int, default=os.getenv("EKYC_LABEL_STUDIO_PROJECT") or None)
     args = parser.parse_args()
-    if not 0 <= args.monitoring_threshold <= 1:
+    if args.monitoring_threshold is not None and not 0 <= args.monitoring_threshold <= 1:
         parser.error("--monitoring-threshold must be between 0 and 1.")
     try:
-        label_studio = urlsplit(args.label_studio_url)
-        if label_studio.scheme not in {"https", "http"} or not label_studio.hostname:
-            raise ValueError("Use an HTTP(S) URL for Label Studio.")
+        for studio_url in (args.label_studio_url, args.label_studio_public_url or args.label_studio_url):
+            label_studio = urlsplit(studio_url)
+            if label_studio.scheme not in {"https", "http"} or not label_studio.hostname:
+                raise ValueError("Use an HTTP(S) URL for Label Studio.")
     except ValueError as exc:
         parser.error(str(exc))
     config = (args.review_queue, args.review_manifest, args.review_dataset_root)
@@ -415,23 +477,34 @@ def main():
             reviewer = os.getenv("EKYC_REVIEW_USER", "reviewer")
             auth = b"Basic " + b64encode(f"{reviewer}:{password}".encode())
     try:
+        local_score = None
+        threshold = 0.7
+        if args.model_bundle is not None:
+            from modeling import score as model_score
+
+            metadata = model_score.load_bundle(args.model_bundle)
+            local_score = model_score.run
+            threshold = metadata["confidence_threshold"]
         if args.review_batch is not None:
             from demo.review import Review
 
             review = Review(args.review_batch, args.label_studio_url, args.label_studio_project, token,
                             personal=os.getenv("EKYC_LABEL_STUDIO_TOKEN_TYPE") == "personal", credentials=credentials)
         queue = ReviewQueue(*config) if all(config) else None
-        monitoring = Monitoring(args.monitoring_db, args.monitoring_threshold)
-    except (OSError, ValueError, sqlite3.Error) as exc:
+        if args.monitoring_threshold is not None:
+            threshold = args.monitoring_threshold
+        monitoring = Monitoring(args.monitoring_db, threshold)
+    except (ImportError, OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
         parser.error(str(exc))
     logging.basicConfig(level=logging.INFO)
-    with ThreadingHTTPServer(("127.0.0.1", args.port), Handler) as server:
+    with ThreadingHTTPServer((args.host, args.port), Handler) as server:
+        server.local_score = local_score
         server.review_queue = queue
         server.review = review
         server.review_auth = auth
         server.monitoring = monitoring
-        server.label_studio_url = args.label_studio_url
-        LOGGER.info("Demo listening on http://127.0.0.1:%d", server.server_port)
+        server.label_studio_url = args.label_studio_public_url or args.label_studio_url
+        LOGGER.info("Demo listening on http://%s:%d", args.host, server.server_port)
         server.serve_forever()
 
 

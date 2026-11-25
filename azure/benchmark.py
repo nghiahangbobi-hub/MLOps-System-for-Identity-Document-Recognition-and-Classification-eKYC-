@@ -4,14 +4,18 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import platform
 from statistics import median
 from tempfile import TemporaryDirectory
 from time import perf_counter
 from uuid import uuid4
+from urllib.parse import urlsplit
 
 from demo.client import MAX_IMAGE_BYTES, ScoringError, encode_image, score
+
+SCORING_SLA_MS = 3000
 
 
 def positive(value):
@@ -126,14 +130,23 @@ def main():
             body = encode_image(payload)
             operation = lambda: score(body, timeout=args.timeout)
             warmup = measure(operation, args.warmup)
+            metrics = measure(operation, args.runs)
+            durations = metrics["successful_attempt_ms"]
+            metrics.update(sla_ms=SCORING_SLA_MS, max_ms=max(durations, default=None),
+                           over_sla=sum(value > SCORING_SLA_MS for value in durations))
+            metrics["sla_pass"] = metrics["successes"] == args.runs and not metrics["over_sla"]
             report.update(payload_bytes=len(body), image_sha256=hashlib.sha256(payload).hexdigest(),
-                          warmup=warmup, results={"scoring": measure(operation, args.runs)})
+                          endpoint_host=urlsplit(os.getenv("EKYC_SCORING_URL", "")).hostname,
+                          deployment=os.getenv("EKYC_SCORING_DEPLOYMENT") or None,
+                          warmup=warmup, results={"scoring": metrics})
         else:
             payload = b"\x00" * (args.payload_mib * 1024**2)
             report.update(payload_bytes=len(payload), results=transfer(args, payload))
     except Exception as exc:
         parser.exit(1, f"Benchmark setup or cleanup failed ({type(exc).__name__}).\n")
     print(json.dumps(report, indent=2))
+    if args.mode == "scoring":
+        return int(not report["results"]["scoring"]["sla_pass"])
     return int(any(entry["failures"] for entry in report["results"].values()))
 
 

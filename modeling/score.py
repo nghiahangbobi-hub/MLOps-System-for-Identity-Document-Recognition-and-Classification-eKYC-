@@ -69,9 +69,12 @@ def validate_metadata(metadata):
 
 
 def init():
+    load_bundle(os.getenv("AZUREML_MODEL_DIR") or os.getenv("MODEL_DIR"))
+
+
+def load_bundle(configured_root):
     global _predictor
     _predictor = None
-    configured_root = os.getenv("AZUREML_MODEL_DIR") or os.getenv("MODEL_DIR")
     if not configured_root:
         raise RuntimeError("Set AZUREML_MODEL_DIR or MODEL_DIR to the model bundle location")
     root = Path(configured_root)
@@ -114,6 +117,7 @@ def init():
     transform = preprocessing(config["image_size"], config["mean"], config["std"],
                               config.get("crop_mode", "full_frame"))
     _predictor = model.eval(), transform, metadata
+    return metadata
 
 
 def request_image(raw_data):

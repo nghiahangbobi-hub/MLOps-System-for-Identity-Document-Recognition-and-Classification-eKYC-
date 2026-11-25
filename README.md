@@ -1,7 +1,19 @@
 # MLOps eKYC
 
 Phân loại ảnh giấy tờ mô phỏng MIDV-2020 thành `ID_Card` hoặc `Passport`.
-Chạy từ thư mục gốc trên Linux với Python 3.11.
+Theo [quy trình nghiệm thu Bài tập 13](WORKFLOW.md) để gán nhãn, huấn luyện ứng viên, kiểm tra staging và vận hành vòng duyệt.
+
+## Khởi động trên Windows, macOS và Linux
+
+Từ thư mục gốc, với Docker Compose v2 đang chạy ở chế độ Linux containers:
+
+```console
+docker compose up --build
+```
+
+Mở http://127.0.0.1:8081. Xem [hướng dẫn chạy, phát triển và nghiệm thu Bài tập 13](LOCAL-DEVELOPMENT.md) để nạp mô hình, chạy huấn luyện hoặc bật Label Studio.
+
+Các bước chạy Python trực tiếp bên dưới dùng Linux và Python 3.11.
 
 | Thư mục | Trách nhiệm |
 |---|---|
@@ -10,10 +22,7 @@ Chạy từ thư mục gốc trên Linux với Python 3.11.
 | `modeling/` | Huấn luyện, đánh giá, đóng gói và phục vụ dự đoán. |
 | `demo/` | Giao diện thử dự đoán và hàng đợi duyệt. |
 | `azure/` | Cấu hình chạy trên Azure ML và các phép đo vận hành. |
-| `checks/` | Kiểm thử xuyên suốt giữa các thành phần. |
-
-Các kiểm thử riêng nằm cạnh mã của từng thành phần. Dữ liệu và kết quả
-huấn luyện có thể lưu ngoài repo.
+Dữ liệu và kết quả huấn luyện có thể lưu ngoài repo.
 
 ```bash
 python3.11 -m venv .venv/release
@@ -56,6 +65,15 @@ python -m modeling.train --dataset-root "$run/clips" \
 Bundle của bộ chạy thử nằm ở `"$run/clips-model"` và dùng được ở bước 3.
 
 ## 2. Huấn luyện và đánh giá
+
+Trong webapp cục bộ, mở **Vận hành → Huấn luyện baseline cục bộ → Chạy baseline** để chẩn đoán trên manifest gốc.
+Chạy webapp bằng môi trường Python có `modeling/requirements.txt` và chuẩn bị
+`Data/MIDV2020_sample_5GB` cùng các manifest trong `Data/splits/` như bước 1.
+Trang vận hành hiển thị tiến độ, log và kết quả test. Mỗi lượt lưu bản sao
+manifest, log, MLflow và bundle mới trong `runs/training/<id>/`. Trọng số
+khởi tạo ImageNet được lưu đệm trong `runs/torch-cache/`. Lượt huấn luyện giữ
+nguyên mô hình đang phục vụ và các lượt trước. Nếu webapp được khởi động lại
+trong khi tiến trình huấn luyện vẫn chạy, lịch sử và log tiếp tục cập nhật.
 
 Với bộ đã giải nén từ bước 1, so sánh hai cấu hình trên validation, khóa
 lựa chọn rồi đánh giá test. Lần đầu cần tải trọng số ImageNet.
@@ -107,35 +125,16 @@ trước khi chạy demo. Có thể trỏ `EKYC_AZ_CLI` tới CLI trong môi tr�
 Danh sách hiển thị tối đa 50 job gần đây, kể cả job đã lưu trữ. Nút **Xem log**
 mở luồng log tối đa 2 phút hoặc 256 KiB cho mỗi lần xem.
 
-Chạy `python -m demo.build` để thực thi build kiểm tra cục bộ. Trang Vận hành
-cập nhật lịch sử build cục bộ mỗi 5 giây và cho phép mở log từng lượt.
-
-Đặt `EKYC_GITHUB_REPO=owner/repo` để xem 30 lượt GitHub Actions gần nhất.
-Repo riêng cần `GH_TOKEN` có quyền đọc Actions. Nút **Log trên GitHub** mở
-trang của từng lượt chạy. Workflow `.github/workflows/ci.yml` kiểm tra cú pháp
-và chạy test monitoring trên push hoặc pull request. Danh sách Azure và GitHub
-tự làm mới mỗi 30 giây. Thiết lập Log Analytics để theo dõi lưu lượng đi trực
-tiếp vào Azure Managed Online Endpoint theo hướng dẫn Azure bên dưới.
+Danh sách Azure tự làm mới mỗi 30 giây. Khi chạy bằng Docker, dùng
+[cấu hình Azure cho Docker](LOCAL-DEVELOPMENT.md#kết-nối-nguồn-azure).
 
 Xem [hàng đợi duyệt và huấn luyện lại](labeling/README.md) hoặc
 [triển khai Azure ML](azure/README.md).
 
-## Kiểm thử cục bộ
+## Kiểm tra mã nguồn
 
 ```bash
-python -m unittest data_pipeline.test_release data_pipeline.test_sample_midv \
-  data_pipeline.test_prepared_midv labeling.test_release labeling.test_hitl \
-  modeling.test_release modeling.test_quality_compare azure.test_release \
-  demo.test_release demo.test_review_queue demo.test_monitoring demo.test_operations demo.test_review
+python -m compileall -q azure data_pipeline demo labeling modeling
 ```
 
-Đặt `EKYC_RELEASE_DATASET` trỏ đến fixture do `data_pipeline.midv2020` tạo
-và đặt `EKYC_CHECK_AZURE_SCHEMAS=1` để chạy thêm kiểm tra tích hợp.
-
-```bash
-python -m checks.release_smoke --source /path/to/clips.tar --output "$run/check-release"
-python -m checks.hitl_smoke --dataset-root "$run/clips" --output "$run/check-review" --runtime podman
-```
-
-Kiểm thử hàng đợi dùng Label Studio chạy trong Podman hoặc Docker
-(`--runtime docker`).
+Các bộ kiểm thử riêng được lưu và chạy cục bộ.

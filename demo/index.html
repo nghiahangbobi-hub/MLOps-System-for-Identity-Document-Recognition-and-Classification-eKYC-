@@ -30,9 +30,9 @@
         <p id="empty">Kết quả sẽ xuất hiện sau khi bạn kiểm tra ảnh.</p>
         <div id="result" hidden>
           <dl class="result-list">
-            <div><dt>Loại giấy tờ</dt><dd id="label"></dd></div>
+            <div><dt>Loại giấy tờ dự đoán</dt><dd id="label"></dd></div>
             <div><dt>Chất lượng ảnh</dt><dd id="status"></dd></div>
-            <div><dt>Độ tin cậy</dt><dd id="confidence" class="blocks"></dd></div>
+            <div><dt>Điểm phân loại</dt><dd id="confidence" class="blocks"></dd></div>
           </dl>
         </div>
         <p id="message" class="message" role="status"></p>
@@ -101,7 +101,7 @@
       if (!response.ok) throw new Error(prediction.error);
       const fields = {
         label: ({ID_Card: 'Thẻ định danh', Passport: 'Hộ chiếu'})[prediction.label] ?? prediction.label,
-        status: ({Clear: 'Rõ', Blur: 'Mờ', Glare: 'Lóa', Occluded: 'Bị che'})[prediction.status] ?? 'Chưa có kết quả',
+        status: ({Clear: 'Rõ', Blur: 'Mờ', Glare: 'Lóa', Occluded: 'Bị che'})[prediction.status] ?? 'Chưa đánh giá',
         confidence: typeof prediction.confidence === 'number'
           ? blockBar(prediction.confidence)
           : 'Chưa có kết quả'
@@ -119,7 +119,9 @@
       message.textContent = ({
         queued: 'Đã đưa ảnh vào hàng đợi duyệt.',
         not_allowlisted: 'Ảnh này không thuộc bộ ảnh mô phỏng được phép đưa vào hàng đợi.'
-      })[reviewStatus] ?? '';
+      })[reviewStatus] ?? (prediction.needs_review
+        ? 'Cần người duyệt xác nhận ảnh và loại giấy tờ. Điểm phân loại cao vẫn có thể đi kèm dự đoán sai.'
+        : '');
     } catch (error) {
       message.textContent = error.message;
     } finally {

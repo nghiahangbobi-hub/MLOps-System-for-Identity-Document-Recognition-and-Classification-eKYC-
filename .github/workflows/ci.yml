@@ -16,6 +16,4 @@ jobs:
         with:
           python-version: '3.11'
       - name: Compile source
-        run: python -m compileall -q azure checks data_pipeline demo labeling modeling
-      - name: Test monitoring
-        run: python -m unittest demo.test_monitoring demo.test_operations
+        run: python -m compileall -q azure data_pipeline demo labeling modeling

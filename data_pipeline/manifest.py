@@ -14,12 +14,12 @@ REVIEW_LABELS = (*QUALITY_LABELS, "Outside_Scope")
 SPLITS = {"train", "val", "validation", "test"}
 
 
-def read_manifest(path: Path) -> list[dict[str, str]]:
+def read_manifest(path: Path, *, preserve_extra=False) -> list[dict[str, str]]:
     with path.open(encoding="utf-8-sig", newline="") as stream:
-        return parse_manifest(csv.DictReader(stream, strict=True))
+        return parse_manifest(csv.DictReader(stream, strict=True), preserve_extra=preserve_extra)
 
 
-def parse_manifest(reader: csv.DictReader) -> list[dict[str, str]]:
+def parse_manifest(reader: csv.DictReader, *, preserve_extra=False) -> list[dict[str, str]]:
     header = reader.fieldnames or ()
     fields = set(header)
     if len(fields) != len(header):
@@ -78,7 +78,7 @@ def parse_manifest(reader: csv.DictReader) -> list[dict[str, str]]:
         ).strip().lower() == "reviewed"):
             if template_labels.setdefault(template, label) != label:
                 raise ValueError(f"Inconsistent split or label for template: {template}")
-        rows.append(normalized)
+        rows.append({**row, **normalized} if preserve_extra else normalized)
     return rows
 
 

@@ -60,14 +60,16 @@ class Monitoring:
             "total": total, "errors": total - successes, "scored": scored,
             "low": low, "threshold": self.threshold, "within_sla": within_sla,
             "latest": latest, "recent": recent, "queued": queued, "label_studio_url": label_studio_url,
-            "azure_configured": bool(os.getenv("EKYC_LOG_ANALYTICS_WORKSPACE")),
+            "azure_workspace_configured": bool(os.getenv("EKYC_LOG_ANALYTICS_WORKSPACE")),
+            "azure_configured": bool(os.getenv("EKYC_LOG_ANALYTICS_WORKSPACE") and os.getenv("AZ_ENDPOINT")),
+            "azure_logs_archived": os.getenv("EKYC_AZURE_LOGS_ARCHIVED") == "1",
         }
 
 
 def azure_snapshot(window):
     workspace = str(UUID(os.environ["EKYC_LOG_ANALYTICS_WORKSPACE"]))
     endpoint = os.getenv("AZ_ENDPOINT", "")
-    deployment = os.getenv("EKYC_SCORING_DEPLOYMENT", "blue")
+    deployment = os.getenv("EKYC_SCORING_DEPLOYMENT") or "blue"
     if not all(re.fullmatch(r"[a-zA-Z0-9-]{1,63}", name) for name in (endpoint, deployment)):
         raise ValueError("Invalid Azure endpoint or deployment name")
     query = (Path(__file__).resolve().parents[1] / "azure" / "telemetry-low-confidence.kql").read_text()
@@ -81,6 +83,6 @@ def azure_snapshot(window):
     )
     rows = json.loads(response.stdout)
     return {
-        "scored": sum(row["SuccessfulPredictions"] for row in rows),
-        "low": sum(row["LowConfidenceEvents"] for row in rows),
+        "scored": sum(int(row["SuccessfulPredictions"]) for row in rows),
+        "low": sum(int(row["LowConfidenceEvents"]) for row in rows),
     }

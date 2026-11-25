@@ -1,0 +1,15 @@
+services:
+  app:
+    image: mlops-ekyc-app:azure
+    build:
+      target: azure
+    environment:
+      AZURE_CONFIG_DIR: /app/azure-config
+      AZ_SUBSCRIPTION: "${AZ_SUBSCRIPTION:-}"
+      AZ_RESOURCE_GROUP: "${AZ_RESOURCE_GROUP:-}"
+      AZ_WORKSPACE: "${AZ_WORKSPACE:-}"
+      AZ_ENDPOINT: "${AZ_ENDPOINT:-}"
+      EKYC_LOG_ANALYTICS_WORKSPACE: "${EKYC_LOG_ANALYTICS_WORKSPACE:-}"
+      EKYC_AZURE_LOGS_ARCHIVED: "${EKYC_AZURE_LOGS_ARCHIVED:-0}"
+    volumes:
+      - "${EKYC_AZURE_CONFIG_DIR:-${HOME}/.azure}:/app/azure-config"
