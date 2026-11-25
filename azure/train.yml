@@ -13,15 +13,15 @@ inputs:
     type: uri_file
     path: azureml:replace-with-manifest:1
     mode: download
-  epochs: 8
+  epochs: 3
   batch_size: 32
 outputs:
   evidence:
     type: uri_folder
     mode: rw_mount
   model_bundle:
-    type: custom_model
-    mode: upload
+    type: uri_folder
+    mode: rw_mount
 command: >-
   python -m modeling.workflow train
   --dataset-root "${{inputs.dataset}}"

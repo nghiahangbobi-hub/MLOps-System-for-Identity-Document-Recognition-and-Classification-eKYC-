@@ -82,7 +82,7 @@ lựa chọn rồi đánh giá test. Lần đầu cần tải trọng số Image
 holdout_hash=$(sha256sum "$run/inputs/held-out.csv" | cut -d ' ' -f 1)
 python -m modeling.quality_compare compare --dataset-root "$source_dir" \
   --development "$run/inputs/development.csv" --held-out-sha256 "$holdout_hash" \
-  --output "$run/comparison-cpu" --device cpu --workers 0 --epochs 8
+  --output "$run/comparison-cpu" --device cpu --workers 0 --epochs 3
 python -m modeling.quality_compare seal --comparison "$run/comparison-cpu" \
   --output "$run/selected"
 python -m modeling.quality_compare evaluate --dataset-root "$source_dir" \
