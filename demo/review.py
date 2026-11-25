@@ -55,7 +55,7 @@ class Review:
         return send(path, body, f"Token {self.token}")
 
     def session_request(self, path, body):
-        from labeling.smoke import Studio
+        from labeling.studio import Studio
 
         with self.session_lock:
             if self.session is None:
@@ -73,7 +73,7 @@ class Review:
             return json.loads(raw)
 
     def for_reviewer(self, email, password):
-        from labeling.smoke import Studio
+        from labeling.studio import Studio
 
         studio = Studio(self.base)
         studio.request("/user/login/")

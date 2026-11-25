@@ -12,9 +12,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("destination", type=Path)
     parser.add_argument("--training-only", action="store_true",
-                        help="Stage the training package before the scoring entrypoint is available.")
+                        help="Stage the training job and its environment only.")
     args = parser.parse_args()
-    required_files = ("train.py",) if args.training_only else ("train.py", "score.py")
+    required_files = ("workflow.py", "train.py", "score.py")
     for filename in required_files:
         entrypoint = MODELING / filename
         if not entrypoint.is_file() or entrypoint.is_symlink():
@@ -35,7 +35,8 @@ def stage(destination, training_only):
     source.mkdir(parents=True)
     for file in MODELING.rglob("*.py"):
         relative = file.relative_to(MODELING)
-        if any(part.startswith(".") for part in relative.parts) or not file.is_file() or file.is_symlink():
+        if (any(part.startswith(".") for part in relative.parts) or file.match("test_*.py")
+                or not file.is_file() or file.is_symlink()):
             continue
         target = source / relative
         target.parent.mkdir(parents=True, exist_ok=True)

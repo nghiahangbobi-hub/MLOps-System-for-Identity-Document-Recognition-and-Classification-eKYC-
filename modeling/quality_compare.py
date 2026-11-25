@@ -164,10 +164,17 @@ def report_groups(raw_rows, targets, outputs, field):
             for group, indices in groups.items()}
 
 
+def selection_rank(document, quality):
+    document_f1 = document["macro_f1"]
+    joint_f1 = min(document_f1, quality["macro_f1"]) if quality["status"] == "measured" else document_f1
+    return joint_f1, document_f1, document["accuracy"], -document["calibration"]["nll"]
+
+
 def fit_candidate(name, splits, development, args, log):
     torch.manual_seed(SEED)
     blocks, backbone_lr = CANDIDATES[name]
     support = Counter(target for _, _, target in splits["train"])
+    quality_support = {label: support[i] for i, label in enumerate(QUALITY_LABELS)}
     has_quality = any(support[i] for i in range(len(QUALITY_LABELS)))
     model = build_model(has_quality, MobileNet_V3_Small_Weights.IMAGENET1K_V1).to(args.device)
     optimizer, frozen = training_setup(model, blocks, backbone_lr)
@@ -179,6 +186,7 @@ def fit_candidate(name, splits, development, args, log):
                              frozen_feature_blocks=frozen)
         outputs, targets, qualities = predict(model, val_loader, args.device)
         validation, _, _ = document_metrics(outputs, targets)
+        quality = quality_metrics(outputs, qualities, quality_support)
         row = {"candidate": name, "epoch": epoch, "train": training, "validation_document": validation}
         log.write(json.dumps(row, allow_nan=False) + "\n")
         log.flush()
@@ -187,13 +195,16 @@ def fit_candidate(name, splits, development, args, log):
                           "val_nll": validation["calibration"]["nll"]}), flush=True)
         mlflow.log_metrics({f"{name}_val_macro_f1": validation["macro_f1"],
                             f"{name}_val_accuracy": validation["accuracy"],
-                            f"{name}_val_nll": validation["calibration"]["nll"]}, step=epoch)
-        rank = (validation["macro_f1"], validation["accuracy"], -validation["calibration"]["nll"])
+                            f"{name}_val_nll": validation["calibration"]["nll"],
+                            **{f"{name}_train_{key}": value for key, value in training.items()},
+                            **({f"{name}_val_quality_macro_f1": quality["macro_f1"]}
+                               if "macro_f1" in quality else {})}, step=epoch)
+        rank = selection_rank(validation, quality)
         if best is None or rank > best["rank"]:
             best = {"rank": rank, "epoch": epoch, "validation": validation, "outputs": outputs,
                     "targets": targets, "qualities": qualities,
                     "weights": {key: value.detach().cpu().clone() for key, value in model.state_dict().items()},
-                    "quality_support": {label: support[i] for i, label in enumerate(QUALITY_LABELS)}}
+                    "quality_support": quality_support}
     return best
 
 
@@ -233,8 +244,11 @@ def compare(args):
         split: DevelopmentImages(args.dataset_root, splits[split], split == "train", args.workers, args.crop_mode)
         for split in ("train", "val")
     }
-    mlflow.set_tracking_uri((args.output / "mlruns").resolve().as_uri())
-    os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
+    tracking = os.getenv("MLFLOW_TRACKING_URI", "")
+    if not tracking or tracking.startswith("file:"):
+        tracking = (args.output / "mlruns").resolve().as_uri()
+        os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
+    mlflow.set_tracking_uri(tracking)
     mlflow.set_experiment("fixed-split-mobilenetv3")
     with mlflow.start_run() as run, (args.output / "epochs.jsonl").open("x") as log:
         mlflow.log_params({"image_size": IMAGE_SIZE, "seed": SEED, "epochs": args.epochs,
@@ -327,8 +341,9 @@ def seal(args):
             raise ValueError(f"Comparison uses a different development roster or lineage: {path}")
 
     def validation_rank(entry):
-        validation = entry[1]["candidates"][entry[1]["selected"]]["validation"]
-        return validation["macro_f1"], validation["accuracy"], -validation["calibration"]["nll"]
+        report = entry[1]
+        validation = report["candidates"][report["selected"]]["validation"]
+        return selection_rank(validation, report.get("validation_quality", {"status": "pending"}))
 
     winner, _ = max(reports, key=validation_rank)
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -415,17 +430,41 @@ def evaluate(args):
     temperature = metadata["document_temperature"]
     result, confidence, correct = document_metrics(outputs, targets, temperature)
     raw_calibration, _, _ = calibration(outputs[:, :len(DOCUMENT_LABELS)], targets, 1.0)
+    high_confidence = 0.90
+    errors = [
+        {"image_id": row["image_id"], "template_id": row["template_id"], "domain": row.get("domain"),
+         "expected": row["label"], "predicted": DOCUMENT_LABELS[prediction], "score": value}
+        for row, prediction, value, matched in zip(
+            evaluated_rows, outputs[:, :len(DOCUMENT_LABELS)].argmax(1).tolist(),
+            confidence.tolist(), correct.tolist(), strict=True
+        ) if not matched
+    ]
+    evaluated_quality = qualities != IGNORE_QUALITY
+    accepted_quality = 0
+    incorrect_accepted = 0
+    if outputs.shape[1] > len(DOCUMENT_LABELS) and not metadata["document_review_all"]:
+        clear = QUALITY_LABELS.index("Clear")
+        accepted = (evaluated_quality & (confidence >= metadata["confidence_threshold"])
+                    & (outputs[:, len(DOCUMENT_LABELS):].argmax(1) == clear))
+        accepted_quality = accepted.sum().item()
+        incorrect_accepted = (accepted & (~correct | (qualities != clear))).sum().item()
     report = {
         "held_out_sha256": holdout_hash, "selection_sha256": sha256(output / "selection.json"),
         "selected": selection["selected"], "selected_epoch": selection["selected_epoch"],
         "minimum_accuracy": GOAL, "acceptance": "pass" if result["accuracy"] >= GOAL else "fail",
         "document": result, "uncalibrated": raw_calibration,
+        "error_audit": {"confidence_threshold": high_confidence,
+                        "high_confidence_errors": sum(error["score"] >= high_confidence for error in errors),
+                        "errors": sorted(errors, key=lambda error: error["score"], reverse=True)},
         "document_review_policy": {"threshold": metadata["confidence_threshold"],
                                    "temperature": temperature, "review_all": metadata["document_review_all"],
                                    **coverage(confidence, correct, metadata["confidence_threshold"],
                                               metadata["document_review_all"])},
         "api_coverage": api_coverage(outputs, confidence, correct,
                                      metadata["confidence_threshold"], metadata["document_review_all"]),
+        "reviewed_acceptance": {"accepted": accepted_quality, "incorrect": incorrect_accepted,
+                                "accuracy": (1 - incorrect_accepted / accepted_quality
+                                             if accepted_quality else None)},
         "quality": quality_metrics(outputs, qualities, selection["quality_training_support"]),
         "templates": report_groups(evaluated_rows, targets, outputs, "template_id"),
     }

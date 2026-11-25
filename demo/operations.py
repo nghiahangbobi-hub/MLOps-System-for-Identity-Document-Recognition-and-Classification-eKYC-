@@ -83,17 +83,25 @@ def github_runs():
 
 
 def local_builds():
+    return local_runs(build_root())
+
+
+def local_runs(root):
     runs = [json.loads(path.read_text(encoding="utf-8"))
-            for path in build_root().glob("*/status.json") if re.fullmatch("[a-f0-9]{32}", path.parent.name)]
+            for path in root.glob("*/status.json") if re.fullmatch("[a-f0-9]{32}", path.parent.name)]
     return sorted(runs, key=lambda run: run["date"], reverse=True)[:30]
 
 
 def local_build_log(run):
+    return local_run_log(build_root(), run, "build.log")
+
+
+def local_run_log(root, run, filename):
     if not re.fullmatch("[a-f0-9]{32}", run):
-        raise ValueError("Invalid build ID")
-    folder = build_root() / run
+        raise ValueError("Invalid run ID")
+    folder = root / run
     metadata = json.loads((folder / "status.json").read_text(encoding="utf-8"))
-    with (folder / "build.log").open("rb") as log:
+    with (folder / filename).open("rb") as log:
         size = log.seek(0, os.SEEK_END)
         log.seek(max(0, size - 256 * 1024))
         content = log.read(256 * 1024).decode("utf-8", errors="replace")

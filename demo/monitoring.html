@@ -11,7 +11,7 @@
   </aside>
   <main>
     <header class="heading">
-      <div><h1>Vận hành eKYC</h1><p>Theo dõi dự đoán, job huấn luyện và build CI.</p></div>
+      <div><h1>Vận hành eKYC</h1><p>Theo dõi dự đoán, huấn luyện và duyệt ảnh.</p></div>
       <div class="controls">
         <span class="pill terminal-status" id="connection" role="status">Đang kết nối</span>
         <label for="window">Khoảng thời gian</label>
@@ -35,36 +35,36 @@
       </section>
       <section class="card">
         <div class="card-head">
+          <div><h2>Huấn luyện baseline cục bộ</h2><p id="training-state">Đang kết nối…</p></div>
+          <div class="actions">
+            <button type="button" class="button" id="start-training" disabled>Chạy baseline</button>
+            <button type="button" class="button" id="reload-training">Làm mới</button>
+          </div>
+        </div>
+        <p>Khởi tạo từ ImageNet và lưu kết quả riêng cho mỗi lượt.</p>
+        <p id="training-feedback" role="status"></p>
+        <div id="training-runs"></div>
+      </section>
+      <section class="card">
+        <div class="card-head">
           <div><h2>Azure ML Jobs</h2><p id="azure-state">Đang kết nối…</p></div>
           <button type="button" class="button" id="reload-azure">Làm mới</button>
         </div>
         <div id="azure-runs"></div>
       </section>
-      <section class="card">
-        <div class="card-head">
-          <div><h2>Build cục bộ</h2><p id="builds-state">Đang kết nối…</p></div>
-          <button type="button" class="button" id="reload-builds">Làm mới</button>
-        </div>
-        <div id="builds-runs"></div>
-      </section>
-      <section class="card">
-        <div class="card-head">
-          <div><h2>Build CI · GitHub Actions</h2><p id="github-state">Đang kết nối…</p></div>
-          <button type="button" class="button" id="reload-github">Làm mới</button>
-        </div>
-        <div id="github-runs"></div>
-      </section>
       <div class="grid split">
         <section class="card">
-          <div class="card-head"><div><h2>Hàng đợi duyệt</h2><p><strong id="queued">—</strong> <span id="queue-label">ảnh đã vào hàng đợi (tổng)</span></p></div></div>
-          <p id="review-summary" role="status">Đang tải trạng thái lô duyệt…</p>
+          <div class="card-head"><div><h2>Gán nhãn lại ảnh</h2><p>Xem ảnh và lưu loại giấy tờ cùng chất lượng ảnh.</p></div></div>
+          <h3>Lô hiện tại</h3>
+          <p id="review-summary" role="status">Đang tải trạng thái lô…</p>
           <div class="actions">
-            <a id="review-link" href="/review" class="button" hidden>Duyệt ảnh</a>
+            <a id="review-link" href="/review" class="button" hidden>Mở lô gán nhãn</a>
             <a id="label-studio" class="button" hidden>Mở dự án Label Studio</a>
           </div>
+          <p id="queue-history" class="message" hidden>Lịch sử hàng đợi · <strong id="queued"></strong> ảnh từng được đưa vào hàng đợi</p>
         </section>
         <section class="card">
-          <div class="card-head"><div><h2>Azure Log Analytics</h2><p id="analytics-state" role="status">Đang kiểm tra cấu hình…</p></div></div>
+          <div class="card-head"><div><h2 id="analytics-title">Azure Log Analytics</h2><p id="analytics-state" role="status">Đang kiểm tra cấu hình…</p></div></div>
           <button type="button" class="button" id="analytics" hidden>Tải tỷ lệ độ tin cậy thấp</button>
         </section>
       </div>
@@ -124,8 +124,9 @@
   }
   async function api(path) {
     const response = await fetch(path);
-    if (!response.ok) throw new Error('Source unavailable');
-    return response.json();
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error);
+    return result;
   }
 
   function update(metrics) {
@@ -137,14 +138,19 @@
     text('sla-count', counts(metrics.within_sla, metrics.total));
     text('errors', ratio(metrics.errors, metrics.total));
     text('error-count', counts(metrics.errors, metrics.total));
-    text('queued', metrics.queued ?? 'Chưa cấu hình');
-    field('queue-label').hidden = metrics.queued === null;
+    field('queue-history').hidden = metrics.queued == null;
+    if (metrics.queued != null) text('queued', metrics.queued);
     const projectUrl = metrics.label_studio_project_url;
     field('review-link').hidden = !projectUrl;
     field('label-studio').hidden = !projectUrl;
     if (projectUrl) field('label-studio').href = projectUrl;
-    if (analytics.hidden && metrics.azure_configured) text('analytics-state', 'Số liệu từ endpoint đã cấu hình.');
-    if (!metrics.azure_configured) text('analytics-state', 'Chưa cấu hình Log Analytics.');
+    text('analytics-title', metrics.azure_logs_archived ? 'Azure Log Analytics · Lịch sử' : 'Azure Log Analytics');
+    if (analytics.hidden && metrics.azure_configured) text('analytics-state', metrics.azure_logs_archived
+      ? 'Xem log đã lưu của endpoint cũ trong khoảng thời gian đã chọn.'
+      : 'Số liệu từ endpoint đã cấu hình.');
+    if (!metrics.azure_configured) text('analytics-state', metrics.azure_workspace_configured
+      ? 'Đã cấu hình workspace. Cần endpoint Azure ML đang hoạt động và gửi log.'
+      : 'Chưa cấu hình workspace Log Analytics.');
     analytics.hidden = !metrics.azure_configured;
     const rows = field('events').tBodies[0];
     rows.replaceChildren();
@@ -207,19 +213,22 @@
     return logRevision;
   }
 
-  async function openBuildLog(run) {
-    const revision = startLog(run, 'Đang tải log build…');
-    const url = `/api/operations/build-log?run=${encodeURIComponent(run.id)}`;
+  async function openLocalLog(run) {
+    const revision = startLog(run, 'Đang tải log…');
+    const url = `/api/operations/training-log?run=${encodeURIComponent(run.id)}`;
     async function refresh() {
       if (revision !== logRevision || !logPanel.open) return;
       try {
         const {content, active, status} = await api(url);
         if (revision !== logRevision || !logPanel.open) return;
+        const output = field('log');
+        const follow = !output.textContent || output.scrollTop + output.clientHeight >= output.scrollHeight - 20;
         text('log', content);
+        if (follow) output.scrollTop = output.scrollHeight;
         text('log-state', status);
         if (active) setTimeout(refresh, 2000);
       } catch {
-        if (revision === logRevision && logPanel.open) text('log-state', 'Không tải được log build.');
+        if (revision === logRevision && logPanel.open) text('log-state', 'Không tải được log.');
       }
     }
     await refresh();
@@ -248,25 +257,30 @@
   function runRows(runs, detailLabel, source) {
     const rows = element('tbody');
     for (const run of runs) {
+      const local = source === 'training';
       const actions = element('div');
       actions.className = 'actions';
-      if (run.inline_log || source === 'builds') {
+      if (run.inline_log || local) {
         const button = element('button', 'Xem log');
         button.type = 'button';
         button.className = 'button';
-        button.onclick = () => source === 'builds' ? openBuildLog(run) : openLog(run);
+        button.onclick = () => local ? openLocalLog(run) : openLog(run);
         actions.append(button);
       }
       if (typeof run.url === 'string' && /^https:\/\//i.test(run.url)) {
-        const link = element('a', source === 'azure' ? 'Azure Studio' : 'Log trên GitHub');
+        const link = element('a', 'Azure Studio');
         link.href = run.url;
         link.target = '_blank';
         link.rel = 'noopener noreferrer';
         actions.append(link);
       }
       const state = run.active ? 'warn' : /^(completed|success)$/i.test(run.status) ? 'good'
-        : /^(failed|failure|timed_out)$/i.test(run.status) ? 'bad' : '';
-      addRow(rows, [run.title, pill(run.status, state), run.detail, when(run.date), actions]);
+        : /^(failed|failure|timed_out|interrupted)$/i.test(run.status) ? 'bad' : '';
+      const metrics = run.metrics;
+      const detail = metrics
+        ? `Accuracy ${percent.format(metrics.accuracy)} · Macro-F1 ${percent.format(metrics.macro_f1)} · ${metrics.accepted ? 'Đạt' : 'Chưa đạt'} ngưỡng 85%`
+        : run.detail;
+      addRow(rows, [run.title, pill(run.status, state), detail, when(run.date), actions]);
     }
     return table(['Tên', 'Trạng thái', detailLabel, 'Tạo lúc', 'Chi tiết'], rows);
   }
@@ -277,7 +291,7 @@
     if (!runs) return;
     const active = runs.filter(run => run.active);
     const history = runs.filter(run => !run.active);
-    const detailLabel = source === 'azure' ? 'Experiment' : source === 'builds' ? 'Kiểm tra' : 'Nhánh';
+    const detailLabel = source === 'azure' ? 'Experiment' : 'Tiến độ / kết quả';
     for (const [label, entries, empty] of [
       ['Đang chạy hoặc chờ', active, 'Hiện không có lượt đang chạy hoặc chờ.'],
       ['Lịch sử', history, 'Chưa có lịch sử.'],
@@ -290,18 +304,51 @@
     }
   }
 
-  const refreshSeconds = {azure: 30, builds: 5, github: 30};
+  const refreshSeconds = {azure: 30, training: 5};
+  const startTraining = field('start-training');
+  let trainingStarting = false;
+  let trainingActive = false;
+  startTraining.onclick = async () => {
+    trainingStarting = startTraining.disabled = true;
+    text('training-feedback', 'Đang gửi yêu cầu…');
+    try {
+      const response = await fetch('/api/operations/training', {
+        method: 'POST',
+        headers: {'X-EKYC-Training': '1'},
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error);
+      trainingActive = true;
+      text('training-feedback', 'Đã khởi động lượt huấn luyện.');
+      openLocalLog(result.run);
+    } catch (error) {
+      text('training-feedback', error.message);
+    } finally {
+      trainingStarting = false;
+      startTraining.disabled = trainingActive;
+      refreshRuns('training');
+    }
+  };
   async function refreshReview() {
+    const reviewLink = field('review-link');
+    reviewLink.textContent = 'Mở lô gán nhãn';
     try {
       const {summary} = await api('/api/monitoring/review');
       if (!summary) {
-        text('review-summary', 'Chưa cấu hình lô duyệt.');
+        text('review-summary', 'Chưa có lô gán nhãn được cấu hình.');
         return;
       }
-      const statuses = [`${summary.pending} chờ duyệt`, `${summary.reviewed} đã lưu nhãn`];
-      if (summary.missing) statuses.push(`${summary.missing} chưa có tác vụ`);
-      if (summary.conflicts) statuses.push(`${summary.conflicts} có nhãn xung đột`);
-      text('review-summary', ['Lô hiện tại', ...statuses].join(' · '));
+      const statuses = [
+        summary.pending ? `${summary.pending} ảnh chờ gán nhãn` : 'Không có ảnh chờ gán nhãn',
+        `${summary.reviewed} ảnh đã lưu nhãn`,
+      ];
+      if (summary.missing) statuses.push(`${summary.missing} ảnh chưa có tác vụ trên Label Studio`);
+      if (summary.conflicts) statuses.push(`${summary.conflicts} ảnh có nhãn xung đột`);
+      if (summary.pending) reviewLink.textContent = 'Gán nhãn ảnh trong webapp';
+      else if (summary.reviewed && !summary.missing && !summary.conflicts) {
+        reviewLink.textContent = 'Xem ảnh đã gán nhãn';
+      }
+      text('review-summary', statuses.join(' · '));
     } catch {
       text('review-summary', 'Không lấy được trạng thái lô từ Label Studio.');
     }
@@ -314,13 +361,22 @@
     try {
       const {runs} = await api(`/api/operations/${source}`);
       text(`${source}-state`, runs === null ? 'Chưa cấu hình nguồn.' : `Cập nhật lúc ${when(Date.now())} · tự làm mới mỗi ${refreshSeconds[source]} giây`);
+      if (source === 'training') {
+        trainingActive = runs.some(run => run.active);
+        startTraining.disabled = trainingStarting || trainingActive;
+      }
       const fingerprint = JSON.stringify(runs);
       if (runFingerprints[source] !== fingerprint) {
         updateRuns(source, runs);
         runFingerprints[source] = fingerprint;
       }
-    } catch {
-      text(`${source}-state`, 'Không lấy được dữ liệu mới từ nguồn.');
+    } catch (error) {
+      const message = source === 'training' && error.message === 'Unknown route.'
+        ? 'API huấn luyện chưa được tải. Hãy khởi động lại webapp.'
+        : error instanceof TypeError || error instanceof SyntaxError
+          ? 'Không lấy được dữ liệu mới từ nguồn.'
+          : error.message;
+      text(`${source}-state`, message);
     } finally {
       button.disabled = false;
     }

@@ -2,21 +2,21 @@
 <html lang="vi">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Duyệt ảnh · eKYC</title>
+<title>Gán nhãn lại ảnh · eKYC</title>
 <link rel="stylesheet" href="/demo.css">
 <div class="shell">
   <aside class="sidebar">
     <a class="brand" href="/"><span class="brand-mark" aria-hidden="true">✓</span> eKYC</a>
     <nav aria-label="Điều hướng chính">
-      <a href="/">Kiểm tra giấy tờ</a><a href="/monitoring">Vận hành</a><a href="/review" aria-current="page">Duyệt ảnh</a>
+      <a href="/">Kiểm tra giấy tờ</a><a href="/monitoring">Vận hành</a><a href="/review" aria-current="page">Gán nhãn lại ảnh</a>
     </nav>
   </aside>
   <main>
     <header class="heading">
-      <div><h1>Duyệt ảnh</h1><p>Xác nhận hoặc sửa nhãn cho ảnh trong lô duyệt.</p></div>
+      <div><h1>Gán nhãn lại ảnh</h1><p>Chọn loại giấy tờ và chất lượng thực tế của từng ảnh, rồi lưu nhãn vào Label Studio.</p></div>
       <span id="progress" class="blocks" role="status"></span>
     </header>
-    <p id="status" role="status">Đang tải lô duyệt…</p>
+    <p id="status" role="status">Đang tải lô gán nhãn…</p>
     <div class="grid split" id="work" hidden>
       <section class="card">
         <label for="task">Ảnh trong lô</label>
@@ -25,7 +25,7 @@
         <p id="prediction"></p>
       </section>
       <form class="card" id="review">
-        <h2>Nhãn sau khi duyệt</h2>
+        <h2>Nhãn do người kiểm tra xác nhận</h2>
         <p id="annotation"></p>
         <div class="message"><label for="label">Loại giấy tờ</label>
           <select id="label" required>
@@ -79,7 +79,7 @@
     field('prediction').textContent = `Dự đoán ban đầu · ${result.label} · ${result.status ?? 'Chưa rõ chất lượng'} · ${(result.confidence * 100).toLocaleString('vi', {maximumFractionDigits: 1})}%`;
     field('annotation').textContent = annotation?.conflict ? 'Có nhãn mâu thuẫn. Kiểm tra trong Label Studio.'
       : annotation ? `Đã lưu · annotation #${annotation.id} · tài khoản #${annotation.reviewer?.id ?? annotation.reviewer ?? '—'}`
-      : event.available ? 'Chờ duyệt' : 'Ảnh chưa được nhập vào dự án Label Studio.';
+      : event.available ? 'Chờ gán nhãn' : 'Ảnh chưa được nhập vào dự án Label Studio.';
     label.value = annotation?.label ?? '';
     quality.value = annotation?.quality ?? '';
     save.disabled = label.disabled = quality.disabled = Boolean(annotation) || !event.available || busy;

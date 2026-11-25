@@ -13,19 +13,21 @@ inputs:
     type: uri_file
     path: azureml:replace-with-manifest:1
     mode: download
-  epochs: 5
-  batch_size: 16
-  learning_rate: 0.001
+  epochs: 8
+  batch_size: 32
 outputs:
+  evidence:
+    type: uri_folder
+    mode: rw_mount
   model_bundle:
     type: custom_model
     mode: upload
 command: >-
-  python -m modeling.train
+  python -m modeling.workflow train
   --dataset-root "${{inputs.dataset}}"
   --manifest "${{inputs.manifest}}"
-  --output-dir "${{outputs.model_bundle}}"
+  --output "${{outputs.evidence}}"
+  --bundle-output "${{outputs.model_bundle}}"
   --epochs ${{inputs.epochs}}
   --batch-size ${{inputs.batch_size}}
-  --learning-rate ${{inputs.learning_rate}}
   --device cpu

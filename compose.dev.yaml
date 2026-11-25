@@ -1,0 +1,8 @@
+services:
+  app:
+    volumes:
+      - "./azure:/app/azure:ro"
+      - "./data_pipeline:/app/data_pipeline:ro"
+      - "./demo:/app/demo:ro"
+      - "./labeling:/app/labeling:ro"
+      - "./modeling:/app/modeling:ro"

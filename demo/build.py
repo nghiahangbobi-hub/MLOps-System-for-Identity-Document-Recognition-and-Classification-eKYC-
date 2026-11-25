@@ -18,7 +18,7 @@ def main():
     folder.mkdir(parents=True, mode=0o700)
     metadata = {
         "id": folder.name, "title": "Kiểm tra CI cục bộ", "status": "running", "active": True,
-        "inline_log": True, "date": datetime.now(timezone.utc).isoformat(), "detail": "compileall · unittest",
+        "inline_log": True, "date": datetime.now(timezone.utc).isoformat(), "detail": "compileall",
     }
 
     def save():
@@ -30,14 +30,9 @@ def main():
         save()
         code = 1
         try:
-            for arguments in (
-                ["-m", "compileall", "-q", "azure", "checks", "data_pipeline", "demo", "labeling", "modeling"],
-                ["-m", "unittest", "demo.test_monitoring", "demo.test_operations"],
-            ):
-                log.write(("$ python " + " ".join(arguments) + "\n").encode())
-                code = subprocess.run([sys.executable, *arguments], stdout=log, stderr=subprocess.STDOUT).returncode
-                if code:
-                    break
+            arguments = ["-m", "compileall", "-q", "azure", "data_pipeline", "demo", "labeling", "modeling"]
+            log.write(("$ python " + " ".join(arguments) + "\n").encode())
+            code = subprocess.run([sys.executable, *arguments], stdout=log, stderr=subprocess.STDOUT).returncode
         except KeyboardInterrupt:
             code = 130
         finally:

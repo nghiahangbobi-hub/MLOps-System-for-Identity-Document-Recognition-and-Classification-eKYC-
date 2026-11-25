@@ -1,0 +1,62 @@
+services:
+  app:
+    build:
+      context: .
+      target: app
+    platform: linux/amd64
+    init: true
+    user: "${EKYC_CONTAINER_USER:-1000:1000}"
+    command: ["python", "-m", "demo.server", "--host", "0.0.0.0", "--port", "${EKYC_APP_PORT:-8081}"]
+    ports:
+      - "127.0.0.1:${EKYC_APP_PORT:-8081}:${EKYC_APP_PORT:-8081}"
+    environment:
+      MLFLOW_TRACKING_URI: "file:///app/runs/mlruns"
+      TORCH_HOME: /app/runs/torch-cache
+      EKYC_MODEL_BUNDLE: "${EKYC_MODEL_BUNDLE:-}"
+      EKYC_SCORING_URL: "${EKYC_SCORING_URL:-}"
+      EKYC_SCORING_KEY: "${EKYC_SCORING_KEY:-}"
+      EKYC_SCORING_DEPLOYMENT: "${EKYC_SCORING_DEPLOYMENT:-}"
+      EKYC_LABEL_STUDIO_URL: "${EKYC_LABEL_STUDIO_URL:-http://label-studio:8080}"
+      EKYC_LABEL_STUDIO_PUBLIC_URL: "${EKYC_LABEL_STUDIO_PUBLIC_URL:-http://127.0.0.1:${EKYC_LABEL_STUDIO_PORT:-8080}}"
+      EKYC_REVIEW_QUEUE: "${EKYC_REVIEW_QUEUE:-}"
+      EKYC_REVIEW_MANIFEST: "${EKYC_REVIEW_MANIFEST:-}"
+      EKYC_REVIEW_DATASET_ROOT: "${EKYC_REVIEW_DATASET_ROOT:-}"
+      EKYC_REVIEW_BATCH: "${EKYC_REVIEW_BATCH:-}"
+      EKYC_LABEL_STUDIO_PROJECT: "${EKYC_LABEL_STUDIO_PROJECT:-}"
+      EKYC_LABEL_STUDIO_EMAIL: "${EKYC_LABEL_STUDIO_EMAIL:-}"
+      EKYC_LABEL_STUDIO_PASSWORD: "${EKYC_LABEL_STUDIO_PASSWORD:-}"
+      EKYC_REVIEW_USER: "${EKYC_REVIEW_USER:-reviewer}"
+      EKYC_REVIEW_PASSWORD: "${EKYC_REVIEW_PASSWORD:-}"
+      EKYC_LABEL_STUDIO_TOKEN: "${EKYC_LABEL_STUDIO_TOKEN:-}"
+      EKYC_LABEL_STUDIO_TOKEN_TYPE: "${EKYC_LABEL_STUDIO_TOKEN_TYPE:-}"
+    volumes:
+      - "./Data:/app/Data:ro"
+      - "./runs:/app/runs"
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:${EKYC_APP_PORT:-8081}/', timeout=2).close()"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
+
+  label-studio:
+    image: docker.io/heartexlabs/label-studio@sha256:844f82c5b08de3f77a57c66f480e0036d3c76c6eff53699e8d47686613faa922
+    platform: linux/amd64
+    profiles: ["review"]
+    ports:
+      - "127.0.0.1:${EKYC_LABEL_STUDIO_PORT:-8080}:8080"
+    environment:
+      LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED: "true"
+      LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT: /label-studio/media
+    volumes:
+      - "label-studio-data:/label-studio/data"
+      - "${EKYC_REVIEW_MEDIA:-./Data}:/label-studio/media:ro"
+    healthcheck:
+      test: ["CMD", "/label-studio/.venv/bin/python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8080/health', timeout=2).close()"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 60s
+
+volumes:
+  label-studio-data:
