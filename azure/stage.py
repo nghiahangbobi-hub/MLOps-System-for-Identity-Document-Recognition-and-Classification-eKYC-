@@ -30,14 +30,19 @@ def main():
         parser.error(str(exc))
 
 
-def stage(destination, training_only):
-    source = destination / "src" / "modeling"
-    source.mkdir(parents=True)
-    for file in MODELING.rglob("*.py"):
+def modeling_sources():
+    for file in sorted(MODELING.rglob("*.py")):
         relative = file.relative_to(MODELING)
         if (any(part.startswith(".") for part in relative.parts) or file.match("test_*.py")
                 or not file.is_file() or file.is_symlink()):
             continue
+        yield file, relative
+
+
+def stage(destination, training_only):
+    source = destination / "src" / "modeling"
+    source.mkdir(parents=True)
+    for file, relative in modeling_sources():
         target = source / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(file, target)

@@ -48,8 +48,12 @@
       <section class="card">
         <div class="card-head">
           <div><h2>Azure ML Jobs</h2><p id="azure-state">Đang kết nối…</p></div>
-          <button type="button" class="button" id="reload-azure">Làm mới</button>
+          <div class="actions">
+            <button type="button" class="button" id="submit-azure" disabled>Phê duyệt và gửi job Azure</button>
+            <button type="button" class="button" id="reload-azure">Làm mới</button>
+          </div>
         </div>
+        <p id="azure-submit-feedback" role="status"></p>
         <div id="azure-runs"></div>
       </section>
       <div class="grid split">
@@ -305,6 +309,40 @@
   }
 
   const refreshSeconds = {azure: 30, training: 5};
+  const submitAzure = field('submit-azure');
+  let approvedInputs;
+  let azureInputRevision;
+  async function loadAzureInputs() {
+    try {
+      const {inputs, revision} = await api('/api/operations/azure/submit');
+      approvedInputs = inputs;
+      azureInputRevision = revision;
+      submitAzure.disabled = !inputs;
+      text('azure-submit-feedback', inputs ? `Manifest ${inputs.manifest} · Compute ${inputs.compute} · 3 epoch`
+        : 'Cấu hình compute và phiên bản dataset, manifest đã duyệt để gửi job.');
+    } catch {
+      text('azure-submit-feedback', 'Không tải được cấu hình gửi job.');
+    }
+  }
+  submitAzure.onclick = async () => {
+    if (!approvedInputs || !confirm(`Xác nhận đã duyệt ${approvedInputs.manifest} và gửi job Azure với 3 epoch?`)) return;
+    submitAzure.disabled = true;
+    text('azure-submit-feedback', 'Đang gửi job Azure…');
+    try {
+      const response = await fetch('/api/operations/azure/submit', {
+        method: 'POST', headers: {'X-EKYC-Azure-Approval': '1', 'X-EKYC-Azure-Inputs': azureInputRevision},
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error);
+      text('azure-submit-feedback', result.existing ? `Job đã có: ${result.name}` : `Đã gửi job: ${result.name}`);
+      refreshRuns('azure');
+    } catch (error) {
+      text('azure-submit-feedback', error.message);
+    } finally {
+      submitAzure.disabled = false;
+    }
+  };
+  loadAzureInputs();
   const startTraining = field('start-training');
   let trainingStarting = false;
   let trainingActive = false;

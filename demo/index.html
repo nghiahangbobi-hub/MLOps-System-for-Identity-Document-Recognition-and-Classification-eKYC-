@@ -31,12 +31,13 @@
         <div id="result" hidden>
           <dl class="result-list">
             <div><dt>Loại giấy tờ dự đoán</dt><dd id="label"></dd></div>
+            <div id="review-decision" hidden><dt>Kết luận</dt><dd>Chờ người duyệt xác nhận</dd></div>
             <div><dt>Chất lượng ảnh</dt><dd id="status"></dd></div>
             <div><dt>Điểm phân loại</dt><dd id="confidence" class="blocks"></dd></div>
           </dl>
         </div>
         <p id="message" class="message" role="status"></p>
-        <div class="actions message"><button id="report" class="button" type="button" hidden>Báo dự đoán sai</button></div>
+        <div class="actions message"><a id="open-review" class="button" hidden>Mở tác vụ Label Studio</a><button id="report" class="button" type="button" hidden>Báo dự đoán sai</button></div>
       </section>
     </div>
   </main>
@@ -48,6 +49,7 @@
   const result = document.querySelector('#result');
   const message = document.querySelector('#message');
   const reportButton = document.querySelector('#report');
+  const reviewLink = document.querySelector('#open-review');
   const imageInput = document.querySelector('#image');
   const preview = document.querySelector('#preview');
   const reviewPill = document.querySelector('#review-pill');
@@ -60,6 +62,7 @@
     empty.hidden = false;
     reportToken = null;
     reportButton.hidden = true;
+    reviewLink.hidden = true;
     reviewPill.hidden = true;
   }
 
@@ -110,13 +113,21 @@
         document.getElementById(field).textContent = value;
       }
       result.hidden = false;
+      document.querySelector('#review-decision').hidden = !prediction.needs_review;
       reviewPill.textContent = prediction.needs_review ? 'Cần duyệt' : 'Không cần duyệt';
       reviewPill.dataset.state = prediction.needs_review ? 'warn' : 'good';
       reviewPill.hidden = false;
       reportToken = response.headers.get('X-EKYC-Report-Token');
       reportButton.hidden = !reportToken;
       const reviewStatus = response.headers.get('X-EKYC-Review-Status');
+      const reviewURL = response.headers.get('X-EKYC-Review-URL');
+      if (reviewURL) {
+        reviewLink.href = reviewURL;
+        reviewLink.hidden = false;
+      }
       message.textContent = ({
+        label_studio: 'Đã tạo tác vụ. Hãy mở Label Studio để xác nhận loại giấy tờ và chất lượng.',
+        dispatch_pending: 'Chưa kết nối được Label Studio. Kiểm tra lại ảnh để thử chuyển tác vụ.',
         queued: 'Đã đưa ảnh vào hàng đợi duyệt.',
         not_allowlisted: 'Ảnh này không thuộc bộ ảnh mô phỏng được phép đưa vào hàng đợi.'
       })[reviewStatus] ?? (prediction.needs_review
@@ -143,6 +154,10 @@
       const result = await response.json();
       if (!response.ok) throw new Error(result.error);
       message.textContent = 'Đã gửi báo cáo.';
+      if (result.review_url) {
+        reviewLink.href = result.review_url;
+        reviewLink.hidden = false;
+      }
       reportToken = null;
       reportButton.hidden = true;
     } catch (error) {

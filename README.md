@@ -8,10 +8,14 @@ Theo [quy trình nghiệm thu Bài tập 13](WORKFLOW.md) để gán nhãn, hu�
 Từ thư mục gốc, với Docker Compose v2 đang chạy ở chế độ Linux containers:
 
 ```console
-docker compose up --build
+docker compose up --build -d --wait
 ```
 
-Mở http://127.0.0.1:8081. Xem [hướng dẫn chạy, phát triển và nghiệm thu Bài tập 13](LOCAL-DEVELOPMENT.md) để nạp mô hình, chạy huấn luyện hoặc bật Label Studio.
+Mở http://127.0.0.1:8081. Sao chép `.env.example` thành `.env` để chỉnh cổng hoặc cấu hình dịch vụ. Trên Linux, tạo `Data/` và `runs/` bằng tài khoản của bạn và đặt `EKYC_CONTAINER_USER` nếu UID/GID khác `1000:1000`. Image dùng `linux/amd64`, nên máy ARM cần bật giả lập amd64.
+
+Để dự đoán bằng bundle cục bộ, đặt `EKYC_MODEL_BUNDLE` thành đường dẫn bundle trong container dưới `/app/runs/` và chạy lại `docker compose up -d --wait`. Với endpoint từ xa, đặt `EKYC_SCORING_URL` và các biến xác thực trong `.env`. Xem [hướng dẫn Label Studio](labeling/README.md) để bật profile `review` và thiết lập dự án.
+
+Khi phát triển, thêm `-f compose.yaml -f compose.dev.yaml` vào lệnh Compose để dùng mã từ máy. Tải lại trang sau khi sửa giao diện, khởi động lại `app` sau khi sửa Python và dựng lại image sau khi đổi phụ thuộc. Kiểm tra các lượt huấn luyện đang chạy trước khi khởi động lại.
 
 Các bước chạy Python trực tiếp bên dưới dùng Linux và Python 3.11.
 
@@ -82,7 +86,7 @@ lựa chọn rồi đánh giá test. Lần đầu cần tải trọng số Image
 holdout_hash=$(sha256sum "$run/inputs/held-out.csv" | cut -d ' ' -f 1)
 python -m modeling.quality_compare compare --dataset-root "$source_dir" \
   --development "$run/inputs/development.csv" --held-out-sha256 "$holdout_hash" \
-  --output "$run/comparison-cpu" --device cpu --workers 0 --epochs 8
+  --output "$run/comparison-cpu" --device cpu --workers 0 --epochs 3
 python -m modeling.quality_compare seal --comparison "$run/comparison-cpu" \
   --output "$run/selected"
 python -m modeling.quality_compare evaluate --dataset-root "$source_dir" \
@@ -125,8 +129,13 @@ trước khi chạy demo. Có thể trỏ `EKYC_AZ_CLI` tới CLI trong môi tr�
 Danh sách hiển thị tối đa 50 job gần đây, kể cả job đã lưu trữ. Nút **Xem log**
 mở luồng log tối đa 2 phút hoặc 256 KiB cho mỗi lần xem.
 
-Danh sách Azure tự làm mới mỗi 30 giây. Khi chạy bằng Docker, dùng
-[cấu hình Azure cho Docker](LOCAL-DEVELOPMENT.md#kết-nối-nguồn-azure).
+Danh sách Azure tự làm mới mỗi 30 giây. Khi chạy bằng Docker, dùng cấu hình bổ sung để dựng image có Azure CLI và dùng phiên đăng nhập cục bộ. Đặt `EKYC_AZURE_CONFIG_DIR` nếu cần dùng thư mục đăng nhập riêng.
+
+```console
+docker compose -f compose.yaml -f compose.azure.yaml up --build -d --wait
+```
+
+Nếu phiên đăng nhập hết hạn, chạy `docker compose -f compose.yaml -f compose.azure.yaml exec app az login --use-device-code`. Xem [hướng dẫn Azure](azure/README.md) để cấu hình Log Analytics.
 
 Xem [hàng đợi duyệt và huấn luyện lại](labeling/README.md) hoặc
 [triển khai Azure ML](azure/README.md).

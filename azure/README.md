@@ -55,6 +55,17 @@ export AZ_MANIFEST_ASSET="azureml:ekyc-midv-manifest:$DATA_VERSION"
 
 ## 2. Gửi job huấn luyện
 
+Sau khi đăng ký manifest đã duyệt, có thể gửi job từ **Vận hành → Azure ML Jobs**.
+Trong `.env`, đặt `EKYC_AZURE_COMPUTE` bằng tên compute,
+`EKYC_AZURE_DATASET` bằng asset ảnh và `EKYC_AZURE_MANIFEST` bằng asset
+manifest. Hai asset cần có phiên bản cụ thể, ví dụ `azureml:ekyc-midv-manifest:20261125`.
+Khởi động lại cấu hình Compose Azure, kiểm tra tên manifest rồi bấm
+**Phê duyệt và gửi job Azure**. Webapp gửi 3 epoch và hiển thị job ID.
+Gửi lại cùng hai asset, compute và mã huấn luyện sẽ trả về job đã có.
+Sau khi sửa mã huấn luyện, có thể gửi lượt mới với cùng phiên bản dữ liệu.
+
+Các lệnh bên dưới hướng dẫn chuẩn bị compute, môi trường và gửi job từ CLI.
+
 Dùng compute sẵn có hoặc tạo compute theo quota vùng của workspace.
 Ví dụ sau dùng Japan East. Chờ compute ở trạng thái `Succeeded`.
 
