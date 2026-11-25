@@ -1,5 +1,17 @@
 # Label Studio
 
+## Kết nối thư mục ảnh cho từng dự án
+
+Sau khi tạo dự án, mở **Settings → Cloud Storage → Add Source Storage → Local Files**. Thêm từng thư mục con được tác vụ sử dụng, chẳng hạn `/label-studio/media/clips/images` hoặc `/label-studio/media/photo/images`. Với bộ MIDV nhiều nguồn, thêm cả `clips`, `photo`, `scan_rotated`, `scan_upright` và `templates` theo mẫu `/label-studio/media/<nguồn>/images`.
+
+Chọn chế độ **Tasks** và lưu nguồn. Khi đã nhập `tasks.json`, mở lại một tác vụ để kiểm tra ảnh. Cài đặt này phải được thực hiện riêng cho mỗi dự án gán nhãn hoặc duyệt trực tiếp.
+
+## Duyệt trực tiếp từ demo
+
+Tạo dự án Label Studio với [hitl.xml](hitl.xml). Điền ID dự án vào `EKYC_LIVE_REVIEW_PROJECT` và thông tin tài khoản dự án vào `EKYC_LABEL_STUDIO_EMAIL` và `EKYC_LABEL_STUDIO_PASSWORD` trong `.env` cục bộ. Gắn cùng thư mục ảnh qua `EKYC_REVIEW_MEDIA` và `EKYC_REVIEW_DATASET_ROOT` rồi cấu hình allowlist như bên dưới.
+
+Demo tạo hoặc mở lại tác vụ khi ảnh trong allowlist có trạng thái **Cần duyệt**, hoặc khi người dùng bấm **Báo dự đoán sai**. Tác vụ mở trực tiếp trong Label Studio để chọn `Passport`, `ID_Card` hoặc `Outside_Scope`, sau đó chọn chất lượng nếu ảnh thuộc phạm vi. Dùng allowlist CSV riêng trong `EKYC_REVIEW_AUDIT_MANIFEST` cho ảnh chỉ dùng đối chiếu. Hai allowlist phải chứa các ảnh khác nhau.
+
 ## Khởi động Label Studio
 
 Đặt `media_root` thành đường dẫn tuyệt đối của dataset khi gán nhãn ban đầu,

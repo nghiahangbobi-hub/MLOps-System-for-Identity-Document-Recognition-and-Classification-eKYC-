@@ -62,7 +62,7 @@ def make_tasks(manifest: Path, dataset_root: Path, media_root: Path, output: Pat
     return len(tasks)
 
 
-def completed_choices(task: dict) -> set[str]:
+def completed_choices(task: dict, expected_label=None) -> set[str]:
     annotations = task.get("annotations", [])
     if not isinstance(annotations, list):
         raise ValueError("Expected a list of annotations")
@@ -83,6 +83,17 @@ def completed_choices(task: dict) -> set[str]:
             continue
         if any(not isinstance(result, dict) for result in results):
             raise ValueError("Expected annotation result objects")
+        if any(result.get("from_name") == "document_type" for result in results):
+            from labeling.hitl import corrected_labels
+
+            label, quality = corrected_labels(results)
+            if label == "Outside_Scope":
+                choices.add(label)
+                continue
+            if expected_label is not None and label != expected_label:
+                raise ValueError("Manual document label disagrees with the source manifest; resolve the discrepancy")
+            choices.add(quality)
+            continue
         quality = [result for result in results if result.get("from_name") == "quality"]
         if len(quality) != 1:
             raise ValueError("Expected one quality result per completed annotation")
@@ -119,7 +130,7 @@ def apply_reviews(manifest: Path, review_export: Path, output: Path) -> dict[str
         if data.get("image_path") != by_id[image_id]["image_path"]:
             raise ValueError(f"Image path mismatch for {image_id}")
         try:
-            choices = completed_choices(task)
+            choices = completed_choices(task, by_id[image_id]["label"])
         except ValueError as error:
             raise ValueError(f"{image_id}: {error}") from error
         if image_id in reviews:

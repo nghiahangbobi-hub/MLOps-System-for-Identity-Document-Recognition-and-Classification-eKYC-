@@ -47,7 +47,7 @@ def train(args):
     missing = [f"{split}/{label}" for split, support in counts.items()
                for label, count in support.items() if not count]
     if missing and not args.baseline:
-        raise ValueError("Add human-reviewed labels for " + ", ".join(missing))
+        print("Incomplete quality coverage: " + ", ".join(missing), flush=True)
     if not args.baseline and any(row.get("quality_status") and row.get("quality_source") != "reviewed"
                                 for row in rows):
         raise ValueError("The release workflow requires Label Studio review provenance")
@@ -76,16 +76,22 @@ def train(args):
         subprocess.run([sys.executable, "-m", "modeling.quality_compare", *map(str, options)], check=True)
     report = selection / "held-out.json"
     issues = release_issues(json.loads(report.read_text()), args.baseline)
+    if missing and not args.baseline:
+        issues.append("Missing human-reviewed labels: " + ", ".join(missing))
     result = {"state": "blocked" if issues else "ready_for_staging", "baseline": args.baseline,
               "issues": issues, "reviewed_quality_support": counts,
               "manifest_sha256": sha256(manifest), "holdout_report_sha256": sha256(report)}
     write_json(args.output / "workflow.json", result)
     print(json.dumps(result), flush=True)
     if args.bundle_output:
-        bundle = check_release(args.output)
         if args.bundle_output.exists() and any(args.bundle_output.iterdir()):
             raise ValueError("Choose a new or empty bundle output directory")
-        shutil.copytree(bundle, args.bundle_output, dirs_exist_ok=True)
+        if issues:
+            args.bundle_output.mkdir(parents=True, exist_ok=True)
+            write_json(args.bundle_output / "blocked.json", result)
+        else:
+            bundle = check_release(args.output)
+            shutil.copytree(bundle, args.bundle_output, dirs_exist_ok=True)
 
 
 def check_release(run):
@@ -95,7 +101,7 @@ def check_release(run):
     report = json.loads(report_path.read_text())
     issues = release_issues(report, workflow["baseline"])
     if issues or workflow["state"] != "ready_for_staging":
-        raise ValueError("Candidate blocked: " + "; ".join(issues))
+        raise ValueError("Candidate blocked: " + "; ".join(workflow.get("issues") or issues))
     selection_path = selected / "selection.json"
     selection = json.loads(selection_path.read_text())
     bundle = selected / "bundle"
@@ -122,7 +128,7 @@ def main():
     training.add_argument("--bundle-output", type=Path)
     training.add_argument("--baseline", action="store_true", help="Allow partial labeling for a diagnostic run.")
     training.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
-    training.add_argument("--epochs", type=int, default=8)
+    training.add_argument("--epochs", type=int, default=3)
     training.add_argument("--threads", type=int, default=6)
     training.add_argument("--batch-size", type=int, default=32)
     training.add_argument("--workers", type=int, default=0)

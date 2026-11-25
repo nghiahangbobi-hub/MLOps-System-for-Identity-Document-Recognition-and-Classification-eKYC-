@@ -228,6 +228,18 @@ def check_development(rows, reference):
             raise ValueError(f"Incomplete or altered fixed {split} assignment")
 
 
+def start_tracking(output):
+    tracking = os.getenv("MLFLOW_TRACKING_URI", "")
+    if not tracking or tracking.startswith("file:"):
+        tracking = (output / "mlruns").resolve().as_uri()
+        os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
+    mlflow.set_tracking_uri(tracking)
+    run_id = os.getenv("MLFLOW_RUN_ID") or None
+    if run_id is None:
+        mlflow.set_experiment("fixed-split-mobilenetv3")
+    return mlflow.start_run(run_id=run_id)
+
+
 def compare(args):
     base = read_csv(args.development)
     rows = base
@@ -244,13 +256,7 @@ def compare(args):
         split: DevelopmentImages(args.dataset_root, splits[split], split == "train", args.workers, args.crop_mode)
         for split in ("train", "val")
     }
-    tracking = os.getenv("MLFLOW_TRACKING_URI", "")
-    if not tracking or tracking.startswith("file:"):
-        tracking = (args.output / "mlruns").resolve().as_uri()
-        os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
-    mlflow.set_tracking_uri(tracking)
-    mlflow.set_experiment("fixed-split-mobilenetv3")
-    with mlflow.start_run() as run, (args.output / "epochs.jsonl").open("x") as log:
+    with start_tracking(args.output) as run, (args.output / "epochs.jsonl").open("x") as log:
         mlflow.log_params({"image_size": IMAGE_SIZE, "seed": SEED, "epochs": args.epochs,
                            "batch_size": args.batch_size, "device": str(args.device),
                            "cpu_threads": args.threads, "workers": args.workers,
@@ -489,7 +495,7 @@ def main():
         sub.add_argument("--base-manifest", type=Path, required=name == "evaluate")
         if name == "compare":
             sub.add_argument("--development", type=Path, required=True)
-            sub.add_argument("--epochs", type=int, default=8)
+            sub.add_argument("--epochs", type=int, default=3)
             sub.add_argument("--crop-mode", choices=("full_frame", "center_square"), default="full_frame")
             sub.add_argument("--retained-target", type=float, default=GOAL)
             sub.add_argument("--held-out-sha256")

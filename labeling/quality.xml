@@ -1,11 +1,18 @@
 <View>
   <Image name="image" value="$image" />
-  <Header value="Choose the main issue affecting document readability." />
-  <Choices name="quality" toName="image" choice="single-radio" required="true">
-    <Choice value="Clear" />
-    <Choice value="Blur" />
-    <Choice value="Glare" />
-    <Choice value="Occluded" />
+  <Header value="Xác nhận loại giấy tờ: Passport (Hộ chiếu), ID_Card (Thẻ định danh) hoặc Outside_Scope (Ngoài phạm vi)." />
+  <Choices name="document_type" toName="image" choice="single-radio" required="true">
+    <Choice value="ID_Card" />
+    <Choice value="Passport" />
     <Choice value="Outside_Scope" />
   </Choices>
+  <View visibleWhen="choice-selected" whenTagName="document_type" whenChoiceValue="ID_Card,Passport">
+    <Header value="Chọn lỗi chính ảnh hưởng khả năng đọc giấy tờ." />
+    <Choices name="quality" toName="image" choice="single-radio" required="true">
+      <Choice value="Clear" />
+      <Choice value="Blur" />
+      <Choice value="Glare" />
+      <Choice value="Occluded" />
+    </Choices>
+  </View>
 </View>

@@ -4,6 +4,7 @@ import argparse
 from base64 import b64decode, b64encode
 from binascii import Error as Base64Error
 from hmac import compare_digest
+from hashlib import sha256
 import json
 import logging
 import os
@@ -15,7 +16,7 @@ from time import perf_counter, sleep
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
 
-from demo import training
+from demo import azure_submit, training
 from demo.client import MAX_IMAGE_BYTES, ScoringError, encode_image, score
 from demo.monitoring import Monitoring, WINDOWS, azure_snapshot
 from demo.operations import (
@@ -72,6 +73,10 @@ class Handler(BaseHTTPRequestHandler):
             self.operation_list({"azure": azure_jobs, "github": github_runs, "builds": local_builds}[source])
         elif route.path == "/api/operations/training":
             self.operation_list(self.training_runs)
+        elif route.path == "/api/operations/azure/submit":
+            inputs = azure_submit.inputs()
+            self.reply(200, json.dumps({"inputs": inputs,
+                                        "revision": azure_submit.revision(inputs) if inputs else None}).encode())
         elif route.path == "/api/operations/training-log":
             self.run_log(route, self.training_log)
         elif route.path == "/api/operations/build-log":
@@ -331,6 +336,8 @@ class Handler(BaseHTTPRequestHandler):
         queue = getattr(self.server, "review_queue", None)
         if self.path == "/api/operations/training":
             self.start_training()
+        elif self.path == "/api/operations/azure/submit":
+            self.submit_azure()
         elif self.path == "/api/review/tasks":
             self.review_request(self.path, write=True)
         elif self.path == "/report" and queue is not None:
@@ -342,17 +349,41 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.reply(404, b'{"error":"Unknown route."}')
 
-    def start_training(self):
+    def local_operator_request(self, header):
         host = self.headers.get("Host")
         port = self.server.server_port
         origins = {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
         if (host is None or f"http://{host}" not in origins
                 or self.headers.get("Origin") not in (None, f"http://{host}")
-                or self.headers.get("X-EKYC-Training") != "1"):
+                or self.headers.get(header) != "1"):
             self.reply(403, b'{"error":"Local training request required."}')
-            return
+            return False
         if self.headers.get("Content-Length", "0") != "0" or self.headers.get("Transfer-Encoding"):
             self.reply(400, b'{"error":"Expected an empty request."}')
+            return False
+        return True
+
+    def submit_azure(self):
+        if not self.local_operator_request("X-EKYC-Azure-Approval"):
+            return
+        config = azure_submit.inputs()
+        if config is None:
+            self.reply(409, json.dumps({"error": "Cần cấu hình compute và data asset đã duyệt."}).encode())
+            return
+        if self.headers.get("X-EKYC-Azure-Inputs") != azure_submit.revision(config):
+            self.reply(409, json.dumps({"error": "Cấu hình đã thay đổi. Hãy tải lại trang trước khi phê duyệt."}).encode())
+            return
+        try:
+            result = azure_submit.submit(config)
+        except RuntimeError as exc:
+            self.reply(502, json.dumps({"error": str(exc)}).encode())
+        except (OSError, subprocess.SubprocessError):
+            self.reply(502, json.dumps({"error": "Không gửi được yêu cầu Azure. Kiểm tra Azure CLI."}).encode())
+        else:
+            self.reply(200 if result["existing"] else 202, json.dumps(result).encode())
+
+    def start_training(self):
+        if not self.local_operator_request("X-EKYC-Training"):
             return
         try:
             run = training.launch()
@@ -390,6 +421,13 @@ class Handler(BaseHTTPRequestHandler):
             status = 200
             if queue is not None:
                 review_status, token = queue.record_prediction(image, result)
+                if live := getattr(self.server, "live_review", None):
+                    event_id = sha256(image).hexdigest()
+                    if result["needs_review"] and (event_id in queue.allowlist or event_id in live.audit):
+                        review_url = self.send_live_review(event_id, queue)
+                        review_status = "label_studio" if review_url else "dispatch_pending"
+                        if review_url:
+                            headers["X-EKYC-Review-URL"] = review_url
                 headers["X-EKYC-Review-Status"] = review_status
                 if token is not None:
                     headers["X-EKYC-Report-Token"] = token
@@ -426,7 +464,17 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             self.queue_failure()
             return
-        self.reply(200, json.dumps({"event_id": digest, "status": "queued"}).encode())
+        result = {"event_id": digest, "status": "queued"}
+        if getattr(self.server, "live_review", None):
+            result["review_url"] = self.send_live_review(digest, queue)
+        self.reply(200, json.dumps(result).encode())
+
+    def send_live_review(self, digest, queue):
+        try:
+            return self.server.live_review.send(digest, queue.allowlist)
+        except (OSError, ValueError, KeyError, TypeError):
+            LOGGER.warning("Could not dispatch allowlisted image to Label Studio")
+            return None
 
     def queue_failure(self):
         LOGGER.warning("review_queue status=503")
@@ -449,6 +497,8 @@ def main():
     parser.add_argument("--label-studio-public-url", default=os.getenv("EKYC_LABEL_STUDIO_PUBLIC_URL") or None)
     parser.add_argument("--review-batch", type=Path, default=os.getenv("EKYC_REVIEW_BATCH") or None)
     parser.add_argument("--label-studio-project", type=int, default=os.getenv("EKYC_LABEL_STUDIO_PROJECT") or None)
+    parser.add_argument("--live-review-project", type=int, default=os.getenv("EKYC_LIVE_REVIEW_PROJECT") or None)
+    parser.add_argument("--review-audit-manifest", type=Path, default=os.getenv("EKYC_REVIEW_AUDIT_MANIFEST") or None)
     args = parser.parse_args()
     if args.monitoring_threshold is not None and not 0 <= args.monitoring_threshold <= 1:
         parser.error("--monitoring-threshold must be between 0 and 1.")
@@ -491,6 +541,18 @@ def main():
             review = Review(args.review_batch, args.label_studio_url, args.label_studio_project, token,
                             personal=os.getenv("EKYC_LABEL_STUDIO_TOKEN_TYPE") == "personal", credentials=credentials)
         queue = ReviewQueue(*config) if all(config) else None
+        live_review = None
+        if args.live_review_project is not None:
+            from demo.live_review import LiveReview
+
+            login = (os.getenv("EKYC_LABEL_STUDIO_EMAIL"), os.getenv("EKYC_LABEL_STUDIO_PASSWORD"))
+            if queue is None or args.live_review_project < 1 or not all(login):
+                raise ValueError("Live review requires an allowlist, a project and a Label Studio account.")
+            live_review = LiveReview(args.label_studio_url, args.label_studio_public_url or args.label_studio_url,
+                                     args.live_review_project, args.review_dataset_root, login,
+                                     args.review_audit_manifest)
+            if live_review.audit.keys() & queue.allowlist.keys():
+                raise ValueError("The review-only allowlist must be separate from training images.")
         if args.monitoring_threshold is not None:
             threshold = args.monitoring_threshold
         monitoring = Monitoring(args.monitoring_db, threshold)
@@ -500,6 +562,7 @@ def main():
     with ThreadingHTTPServer((args.host, args.port), Handler) as server:
         server.local_score = local_score
         server.review_queue = queue
+        server.live_review = live_review
         server.review = review
         server.review_auth = auth
         server.monitoring = monitoring
