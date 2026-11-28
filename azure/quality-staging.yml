@@ -1,0 +1,16 @@
+$schema: https://azuremlschemas.azureedge.net/latest/managedOnlineDeployment.schema.json
+name: quality-staging
+endpoint_name: replace-with-existing-endpoint-name
+model: azureml:ekyc-mobilenetv3-quality:1
+environment: azureml:ekyc-inference:1
+code_configuration:
+  code: ./src/modeling
+  scoring_script: score.py
+instance_type: Standard_D2as_v4
+instance_count: 1
+app_insights_enabled: true
+environment_variables:
+  EKYC_FORCE_REVIEW: "1"
+request_settings:
+  request_timeout_ms: 30000
+

@@ -98,7 +98,32 @@ asset thư mục ảnh gốc. Job dùng MobileNetV3 pretrained, chọn trên val
 và đánh giá test sau khi khóa checkpoint. Kết quả gồm output `evidence` và
 `model_bundle` cho ứng viên qua kiểm tra offline.
 
+### Huấn luyện từ file TAR MIDV-2020
+
+Dùng `train-full-midv.yml` với asset `uri_file` chứa file TAR và asset
+`uri_file` chứa manifest đã duyệt. Manifest cần có SHA-256 ảnh gốc.
+Chạy `python azure/stage.py "$spec" --training-only` để chuẩn bị mã. Đặt
+`AZ_ARCHIVE_ASSET` và `AZ_MANIFEST_ASSET` thành ID phiên bản của hai asset.
+
+```bash
+az ml job create "${workspace[@]}" -f "$spec/train-full-midv.yml" \
+  --set "compute=azureml:$AZ_COMPUTE" "inputs.archive.path=$AZ_ARCHIVE_ASSET" \
+        "inputs.reviewed.path=$AZ_MANIFEST_ASSET"
+```
+
+Job dùng ảnh trong TAR để phân loại loại giấy tờ và tính loss chất lượng
+trên các ảnh có nhãn đã duyệt. Xem `archive-summary.json` trong output
+`evidence` để kiểm tra số ảnh, phần chia tập và số nhãn chất lượng.
+
 ## 3. Triển khai và kiểm tra
+
+Để kiểm thử một ứng viên chưa đạt cổng phát hành, dùng
+`quality-staging.yml` với model đã đăng ký và endpoint thử nghiệm có sẵn.
+Deployment này giữ 0% traffic và bật `EKYC_FORCE_REVIEW=1`. Gọi đích danh
+`quality-staging` qua header `azureml-model-deployment` hoặc tham số
+`--deployment-name` của Azure CLI. Tiêu chí phát hành được kiểm tra riêng
+bằng `modeling.workflow check-release`. Đặt tên endpoint trong
+[truy vấn low confidence](telemetry-quality-staging.kql) trước khi chạy.
 
 Sau khi job `Completed`, tải output `evidence`, tìm thư mục chứa
 `workflow.json` và kiểm tra hash cùng kết luận của ứng viên. [Lệnh tải output của Azure CLI](https://learn.microsoft.com/cli/azure/ml/job#az-ml-job-download)

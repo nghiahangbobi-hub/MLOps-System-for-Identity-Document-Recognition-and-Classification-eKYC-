@@ -1,0 +1,31 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandJob.schema.json
+type: command
+experiment_name: ekyc-midv2020
+display_name: ekyc-quality-full-midv-5gb
+code: ./src
+compute: azureml:replace-with-training-compute
+environment: azureml:ekyc-training:1
+inputs:
+  archive:
+    type: uri_file
+    path: azureml:replace-with-archive:1
+    mode: download
+  reviewed:
+    type: uri_file
+    path: azureml:replace-with-reviewed-manifest:1
+    mode: download
+  epochs: 3
+  image_size: 160
+outputs:
+  evidence:
+    type: uri_folder
+    mode: upload
+  model_bundle:
+    type: uri_folder
+    mode: upload
+command: |-
+  set -eu
+  scratch=$(mktemp -d)
+  python -m modeling.midv_archive --archive "${{inputs.archive}}" --reference "${{inputs.reviewed}}" --output "$scratch/dataset" --image-size ${{inputs.image_size}} --summary "$scratch/archive-summary.json"
+  python -m modeling.workflow train --dataset-root "$scratch/dataset" --manifest "$scratch/dataset/manifest.csv" --output "${{outputs.evidence}}" --bundle-output "${{outputs.model_bundle}}" --epochs ${{inputs.epochs}} --image-size ${{inputs.image_size}} --candidates fine_tuned --batch-size 64 --threads 4 --device cpu
+  cp "$scratch/archive-summary.json" "${{outputs.evidence}}/archive-summary.json"

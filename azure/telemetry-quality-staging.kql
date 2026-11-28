@@ -1,0 +1,15 @@
+// Azure Monitor Logs. One event per prediction provides both numerator and denominator.
+let endpoint = "<endpoint-name>";
+let deployment = "quality-staging";
+AmlOnlineEndpointConsoleLog
+| where TimeGenerated >= ago(24h)
+| where tostring(split(_ResourceId, "/")[-1]) =~ endpoint and DeploymentName =~ deployment
+| where Message contains "ekyc.prediction"
+| extend Event = parse_json(extract(@"(\{[^{}]*""event""\s*:\s*""ekyc\.prediction""[^{}]*\})", 1, Message))
+| where tostring(Event.event) == "ekyc.prediction"
+| extend Low = tobool(Event.low_document_confidence), Review = tobool(Event.needs_review)
+| where isnotnull(Low) and isnotnull(Review)
+| summarize Predictions = count(), LowConfidence = countif(Low), NeedsReview = countif(Review)
+    by WindowStart = bin(TimeGenerated, 15m)
+| extend LowConfidenceRate = todouble(LowConfidence) / Predictions
+| order by WindowStart desc

@@ -46,9 +46,9 @@ def stage(destination, training_only):
         target = source / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(file, target)
-    definitions = ["train.yml", "environment-training.yml", "conda-training.yml"]
+    definitions = ["train.yml", "train-full-midv.yml", "environment-training.yml", "conda-training.yml"]
     if not training_only:
-        definitions.extend(("endpoint.yml", "deployment.yml", "environment-inference.yml",
+        definitions.extend(("endpoint.yml", "deployment.yml", "quality-staging.yml", "environment-inference.yml",
                             "conda-inference.yml"))
     for filename in definitions:
         shutil.copyfile(AZURE / filename, destination / filename)

@@ -181,10 +181,18 @@ def run(raw_data, request_headers=None):
     status = None
     if metadata["has_quality_head"]:
         status = QUALITY_LABELS[logits[document_count:].argmax().item()]
+    needs_review = (status != "Clear" or metadata.get("document_review_all", False)
+                    or low_document_confidence or os.getenv("EKYC_FORCE_REVIEW") == "1")
+    if os.getenv("AZUREML_MODEL_DIR"):
+        print(json.dumps({
+            "event": "ekyc.prediction",
+            "low_document_confidence": low_document_confidence,
+            "needs_review": needs_review,
+            "quality_status": status,
+        }), flush=True)
     return {
         "label": DOCUMENT_LABELS[index.item()],
         "status": status,
         "confidence": confidence,
-        "needs_review": (status != "Clear" or metadata.get("document_review_all", False)
-                         or low_document_confidence),
+        "needs_review": needs_review,
     }

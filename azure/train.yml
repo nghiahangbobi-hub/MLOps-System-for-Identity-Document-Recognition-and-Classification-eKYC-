@@ -18,10 +18,10 @@ inputs:
 outputs:
   evidence:
     type: uri_folder
-    mode: rw_mount
+    mode: upload
   model_bundle:
     type: uri_folder
-    mode: rw_mount
+    mode: upload
 command: >-
   python -m modeling.workflow train
   --dataset-root "${{inputs.dataset}}"

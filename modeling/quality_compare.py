@@ -20,7 +20,7 @@ from torchvision import transforms
 from torchvision.models import MobileNet_V3_Small_Weights
 
 from . import score
-from .network import ARCHITECTURE, DOCUMENT_LABELS, IMAGE_SIZE, MEAN, QUALITY_LABELS, STD, build_model, preprocessing
+from .network import ARCHITECTURE, DOCUMENT_LABELS, IMAGE_SIZE, MAX_IMAGE_SIZE, MEAN, QUALITY_LABELS, STD, build_model, preprocessing
 from .quality_metrics import calibration, classification_metrics, coverage, fit_temperature, select_threshold
 from .train import IGNORE_QUALITY, Images, load_rows, publish_bundle, resolve_image_path, run_epoch
 
@@ -80,9 +80,9 @@ def training_setup(model, trainable_blocks, backbone_lr):
 class DevelopmentImages(Dataset):
     """Decode and resize the development split once, applying augmentation per epoch."""
 
-    def __init__(self, root, rows, training, workers, crop_mode):
+    def __init__(self, root, rows, training, workers, crop_mode, image_size):
         root = root.resolve()
-        resize, *tensor_transforms = preprocessing(IMAGE_SIZE, crop_mode=crop_mode).transforms
+        resize, *tensor_transforms = preprocessing(image_size, crop_mode=crop_mode).transforms
 
         def read(row):
             with Image.open(resolve_image_path(root, row[0])) as image:
@@ -178,21 +178,28 @@ def fit_candidate(name, splits, development, args, log):
     has_quality = any(support[i] for i in range(len(QUALITY_LABELS)))
     model = build_model(has_quality, MobileNet_V3_Small_Weights.IMAGENET1K_V1).to(args.device)
     optimizer, frozen = training_setup(model, blocks, backbone_lr)
+    quality_weights = None
+    if has_quality:
+        # Temper inverse-frequency weighting where reviewed defects are scarce.
+        counts = torch.tensor(list(quality_support.values()), dtype=torch.float32)
+        quality_weights = counts.clamp_min(1).rsqrt().to(args.device)
     train_loader = loader(development["train"], args, training=True)
     val_loader = loader(development["val"], args)
     best = None
     for epoch in range(1, args.epochs + 1):
         training = run_epoch(model, train_loader, args.device, has_quality, optimizer,
-                             frozen_feature_blocks=frozen)
+                             frozen_feature_blocks=frozen, quality_weights=quality_weights)
         outputs, targets, qualities = predict(model, val_loader, args.device)
         validation, _, _ = document_metrics(outputs, targets)
         quality = quality_metrics(outputs, qualities, quality_support)
-        row = {"candidate": name, "epoch": epoch, "train": training, "validation_document": validation}
+        row = {"candidate": name, "epoch": epoch, "train": training, "validation_document": validation,
+               "validation_quality": quality}
         log.write(json.dumps(row, allow_nan=False) + "\n")
         log.flush()
         print(json.dumps({"candidate": name, "epoch": epoch, "train": training["document_accuracy"],
                           "val_accuracy": validation["accuracy"], "val_macro_f1": validation["macro_f1"],
-                          "val_nll": validation["calibration"]["nll"]}), flush=True)
+                          "val_nll": validation["calibration"]["nll"],
+                          "val_quality_macro_f1": quality.get("macro_f1")}), flush=True)
         mlflow.log_metrics({f"{name}_val_macro_f1": validation["macro_f1"],
                             f"{name}_val_accuracy": validation["accuracy"],
                             f"{name}_val_nll": validation["calibration"]["nll"],
@@ -253,19 +260,20 @@ def compare(args):
     splits = load_rows(snapshot, args.dataset_root)
     require_classes(splits["val"], "Validation")
     development = {
-        split: DevelopmentImages(args.dataset_root, splits[split], split == "train", args.workers, args.crop_mode)
+        split: DevelopmentImages(args.dataset_root, splits[split], split == "train",
+                                 args.workers, args.crop_mode, args.image_size)
         for split in ("train", "val")
     }
     with start_tracking(args.output) as run, (args.output / "epochs.jsonl").open("x") as log:
-        mlflow.log_params({"image_size": IMAGE_SIZE, "seed": SEED, "epochs": args.epochs,
+        mlflow.log_params({"image_size": args.image_size, "seed": SEED, "epochs": args.epochs,
                            "batch_size": args.batch_size, "device": str(args.device),
                            "cpu_threads": args.threads, "workers": args.workers,
                            "torch_version": torch.__version__, "pretrained_weights": "IMAGENET1K_V1",
                            "crop_mode": args.crop_mode,
-                           "head_lr": HEAD_LR, "fine_tuned_backbone_lr": CANDIDATES["fine_tuned"][1],
+                           "head_lr": HEAD_LR, "quality_loss_weighting": "inverse_sqrt_frequency", "fine_tuned_backbone_lr": CANDIDATES["fine_tuned"][1],
                            "fine_tuned_blocks": CANDIDATES["fine_tuned"][0], "weight_decay": WEIGHT_DECAY,
                            "development_sha256": sha256(snapshot), "held_out_sha256": args.held_out_sha256})
-        candidates = {name: fit_candidate(name, splits, development, args, log) for name in CANDIDATES}
+        candidates = {name: fit_candidate(name, splits, development, args, log) for name in args.candidates}
         name = max(candidates, key=lambda candidate: candidates[candidate]["rank"])
         best = candidates[name]
         outputs, targets = best["outputs"], best["targets"]
@@ -279,7 +287,7 @@ def compare(args):
         metadata = {"format_version": 1, "architecture": ARCHITECTURE,
                     "document_labels": DOCUMENT_LABELS, "quality_labels": QUALITY_LABELS,
                     "has_quality_head": has_quality, "preprocessing": {
-                        "image_size": IMAGE_SIZE, "mean": MEAN, "std": STD, "crop_mode": args.crop_mode},
+                        "image_size": args.image_size, "mean": MEAN, "std": STD, "crop_mode": args.crop_mode},
                     "confidence_threshold": threshold, "document_temperature": temperature,
                     "document_review_all": review_all}
         publish_bundle(args.output / "bundle", model, metadata)
@@ -287,7 +295,8 @@ def compare(args):
             "selection_schema": 1, "mlflow_run_id": run.info.run_id, "seed": SEED,
             "runtime": {"torch_version": torch.__version__, "device": str(args.device),
                         "threads": args.threads, "workers": args.workers, "epochs": args.epochs,
-                        "batch_size": args.batch_size, "crop_mode": args.crop_mode},
+                        "batch_size": args.batch_size, "crop_mode": args.crop_mode,
+                        "image_size": args.image_size},
             "reference_development_sha256": sha256(args.development),
             "development_sha256": sha256(snapshot), "held_out_sha256": args.held_out_sha256,
             "weights_sha256": sha256(args.output / "bundle" / "weights.pt"),
@@ -429,7 +438,7 @@ def evaluate(args):
     # The exclusive marker also blocks concurrent or interrupted evaluations.
     claim_evaluation(output, holdout_hash)
     model, transform, metadata = score._predictor
-    test_images = Images(args.dataset_root, splits["test"], IMAGE_SIZE, transform=transform)
+    test_images = Images(args.dataset_root, splits["test"], metadata["preprocessing"]["image_size"], transform=transform)
     outputs, targets, qualities = predict(model.to(args.device), loader(test_images, args), args.device)
     if targets.tolist() != [label for _, label in expected_order]:
         raise ValueError("Held-out prediction targets differ from manifest order")
@@ -496,6 +505,9 @@ def main():
         if name == "compare":
             sub.add_argument("--development", type=Path, required=True)
             sub.add_argument("--epochs", type=int, default=3)
+            sub.add_argument("--image-size", type=int, choices=range(32, MAX_IMAGE_SIZE + 1),
+                             default=IMAGE_SIZE, metavar="[32-1024]")
+            sub.add_argument("--candidates", nargs="+", choices=tuple(CANDIDATES), default=tuple(CANDIDATES))
             sub.add_argument("--crop-mode", choices=("full_frame", "center_square"), default="full_frame")
             sub.add_argument("--retained-target", type=float, default=GOAL)
             sub.add_argument("--held-out-sha256")

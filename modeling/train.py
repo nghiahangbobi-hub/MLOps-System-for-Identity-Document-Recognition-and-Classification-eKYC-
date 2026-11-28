@@ -138,7 +138,7 @@ class Images(Dataset):
 
 
 def run_epoch(model, loader, device, has_quality_head, optimizer=None, *,
-              frozen_feature_blocks=0):
+              frozen_feature_blocks=0, quality_weights=None):
     training = optimizer is not None
     model.train(training)
     if training and frozen_feature_blocks:
@@ -168,7 +168,7 @@ def run_epoch(model, loader, device, has_quality_head, optimizer=None, *,
             if has_quality_head and mask.any():
                 quality_logits = logits[mask, len(DOCUMENT_LABELS):]
                 targets = quality[mask]
-                auxiliary_loss = F.cross_entropy(quality_logits, targets)
+                auxiliary_loss = F.cross_entropy(quality_logits, targets, weight=quality_weights)
                 loss = loss + auxiliary_loss
                 quality_count += targets.numel()
                 quality_correct += (quality_logits.argmax(1) == targets).sum().item()

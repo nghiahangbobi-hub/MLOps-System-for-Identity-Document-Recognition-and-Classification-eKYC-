@@ -9,6 +9,7 @@ import subprocess
 import sys
 
 from .quality_compare import GOAL, QUALITY_LABELS, read_csv, require_classes, sha256, split_of, write_csv, write_json
+from .network import IMAGE_SIZE, MAX_IMAGE_SIZE
 from .train import load_rows
 
 
@@ -67,9 +68,11 @@ def train(args):
     selection = args.output / "selected"
     runtime = ["--dataset-root", args.dataset_root, "--device", args.device,
                "--threads", args.threads, "--batch-size", args.batch_size, "--workers", args.workers]
+    candidate_options = ["--candidates", *args.candidates] if args.candidates else []
     for options in (
         ["compare", *runtime, "--development", development, "--held-out-sha256", sha256(holdout),
-         "--epochs", args.epochs, "--output", comparison],
+         "--epochs", args.epochs, "--image-size", args.image_size, *candidate_options,
+         "--output", comparison],
         ["seal", "--comparison", comparison, "--output", selection],
         ["evaluate", *runtime, "--base-manifest", manifest, "--held-out", holdout, "--output", selection],
     ):
@@ -129,6 +132,9 @@ def main():
     training.add_argument("--baseline", action="store_true", help="Allow partial labeling for a diagnostic run.")
     training.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     training.add_argument("--epochs", type=int, default=3)
+    training.add_argument("--image-size", type=int, choices=range(32, MAX_IMAGE_SIZE + 1),
+                          default=IMAGE_SIZE, metavar="[32-1024]")
+    training.add_argument("--candidates", nargs="+", choices=("frozen", "fine_tuned"))
     training.add_argument("--threads", type=int, default=6)
     training.add_argument("--batch-size", type=int, default=32)
     training.add_argument("--workers", type=int, default=0)
